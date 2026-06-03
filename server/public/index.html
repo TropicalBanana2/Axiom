@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Axiom — self-hosted zombs.io console</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48Y2lyY2xlIGN4PSI1MCIgY3k9IjUwIiByPSI0MCIgZmlsbD0iIzBhMGEwYiIgc3Ryb2tlPSIjZmZmZmZmIiBzdHJva2Utd2lkdGg9IjQiLz48L3N2Zz4=">
+  <link rel="stylesheet" href="/asset/axiom-shell.css">
+  <style>
+    body { overflow-y: auto; }
+    .ax-landing {
+      min-height: 100vh;
+      background:
+        radial-gradient(ellipse 80% 50% at 50% -10%, rgba(99,102,241,0.10), transparent 60%),
+        radial-gradient(ellipse 60% 40% at 20% 110%, rgba(168,85,247,0.05), transparent 60%),
+        radial-gradient(ellipse 50% 35% at 80% 105%, rgba(56,189,248,0.05), transparent 60%),
+        var(--bg);
+      position: relative;
+      overflow: hidden;
+    }
+    .ax-landing::before {
+      content: "";
+      position: absolute; inset: 0;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+      background-size: 56px 56px;
+      pointer-events: none;
+      mask-image: radial-gradient(ellipse at 50% 30%, black 40%, transparent 80%);
+    }
+
+    /* Nav */
+    .ax-nav {
+      position: relative; z-index: 2;
+      display: flex; align-items: center; gap: 24px;
+      max-width: 1200px; margin: 0 auto;
+      padding: 22px 32px;
+    }
+    .ax-nav-logo { font: 600 14px/1 var(--font); letter-spacing: 4px; color: var(--text); }
+    .ax-nav-links { display: flex; gap: 22px; margin-left: 32px; }
+    .ax-nav-links a {
+      font: 13px var(--font); color: var(--text-mute);
+      text-decoration: none; transition: color .1s;
+    }
+    .ax-nav-links a:hover { color: var(--text); }
+    .ax-nav-cta { margin-left: auto; display: flex; gap: 10px; }
+
+    /* Hero */
+    .ax-hero {
+      position: relative; z-index: 2;
+      max-width: 1200px; margin: 0 auto;
+      padding: 60px 32px 100px;
+      text-align: center;
+    }
+    .ax-hero-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 5px 12px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      font: 11px var(--font-mono); color: var(--text-mute);
+      margin-bottom: 28px;
+    }
+    .ax-hero-badge-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--success); box-shadow: 0 0 6px var(--success);
+    }
+    .ax-hero h1 {
+      font: 600 56px/1.05 var(--font);
+      letter-spacing: -1.5px;
+      color: var(--text);
+      margin: 0 auto 22px;
+      max-width: 720px;
+    }
+    .ax-hero h1 .ax-hero-gradient {
+      background: linear-gradient(135deg, #c4b5fd 0%, #818cf8 50%, #38bdf8 100%);
+      -webkit-background-clip: text; background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .ax-hero p {
+      font: 16px/1.6 var(--font);
+      color: var(--text-mute);
+      max-width: 560px; margin: 0 auto 36px;
+    }
+    .ax-hero-cta { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+    .ax-btn.large { padding: 11px 22px; font-size: 14px; border-radius: var(--radius); }
+
+    /* Features grid */
+    .ax-section { position: relative; z-index: 2; max-width: 1100px; margin: 0 auto; padding: 60px 32px; }
+    .ax-section-title { font: 500 11px var(--font-mono); color: var(--text-dim); text-transform: uppercase; letter-spacing: 2px; text-align: center; margin-bottom: 16px; }
+    .ax-section-title::before { content: "// "; color: var(--border-h); }
+    .ax-section h2 { font: 600 32px/1.2 var(--font); letter-spacing: -0.5px; color: var(--text); text-align: center; margin: 0 auto 50px; max-width: 600px; }
+    .ax-features {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+    }
+    .ax-feature {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 22px 22px 24px;
+      transition: border-color .15s, transform .15s;
+    }
+    .ax-feature:hover { border-color: var(--border-h); transform: translateY(-2px); }
+    .ax-feature-icon {
+      width: 32px; height: 32px;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text); font: 14px var(--font-mono);
+      margin-bottom: 14px;
+    }
+    .ax-feature h3 { font: 500 15px var(--font); color: var(--text); margin: 0 0 8px; }
+    .ax-feature p { font: 13px/1.55 var(--font); color: var(--text-mute); margin: 0; }
+
+    /* Engines section */
+    .ax-engines { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; max-width: 980px; margin: 0 auto; }
+    @media (max-width: 720px) { .ax-engines { grid-template-columns: 1fr; } .ax-hero h1 { font-size: 38px; } }
+    .ax-engine {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 26px 24px;
+    }
+    .ax-engine-tag {
+      display: inline-block; padding: 3px 10px;
+      background: rgba(99,102,241,0.10);
+      color: #a5b4fc;
+      font: 500 10px var(--font-mono);
+      border-radius: 4px;
+      letter-spacing: 0.5px;
+      margin-bottom: 16px;
+    }
+    .ax-engine h3 { font: 500 17px var(--font); color: var(--text); margin: 0 0 8px; }
+    .ax-engine p { font: 13px/1.55 var(--font); color: var(--text-mute); margin: 0; }
+
+    /* Footer */
+    .ax-footer {
+      position: relative; z-index: 2;
+      max-width: 1200px; margin: 80px auto 0;
+      padding: 32px 32px 40px;
+      border-top: 1px solid var(--border);
+      display: flex; justify-content: space-between; align-items: center;
+      font: 12px var(--font-mono); color: var(--text-dim);
+    }
+    .ax-footer a { color: var(--text-mute); text-decoration: none; margin-left: 18px; }
+    .ax-footer a:hover { color: var(--text); }
+  </style>
+</head>
+<body>
+
+<div class="ax-landing">
+
+  <nav class="ax-nav">
+    <div class="ax-nav-logo">AXIOM</div>
+    <div class="ax-nav-links">
+      <a href="#features">Features</a>
+      <a href="#engines">Engines</a>
+      <a href="https://github.com/axiom/axiom" target="_blank">Source</a>
+    </div>
+    <div class="ax-nav-cta">
+      <a href="/app" class="ax-btn">Open dashboard</a>
+      <a href="/play" class="ax-btn primary">▶ Play</a>
+    </div>
+  </nav>
+
+  <section class="ax-hero">
+    <span class="ax-hero-badge"><span class="ax-hero-badge-dot"></span>self-hosted · localhost</span>
+    <h1>Stay in the game.<br><span class="ax-hero-gradient">Even when you're not.</span></h1>
+    <p>Axiom is a self-hosted scripting console for zombs.io. Persistent VPS bots, search-first in-game UI, and an opinionated scripting engine — all running on your own machine.</p>
+    <div class="ax-hero-cta">
+      <a href="/play" class="ax-btn primary large">▶ Play now</a>
+      <a href="/app" class="ax-btn large">Manage sessions</a>
+    </div>
+  </section>
+
+  <section class="ax-section" id="engines">
+    <div class="ax-section-title">three engines</div>
+    <h2>Built around three independent runtimes.</h2>
+    <div class="ax-engines">
+      <div class="ax-engine">
+        <div class="ax-engine-tag">UI engine</div>
+        <h3>Schema-driven panel.</h3>
+        <p>The in-game console reads a single JSON schema. Tabs, sections, controls — all data. Search anything across every tab with one keystroke.</p>
+      </div>
+      <div class="ax-engine">
+        <div class="ax-engine-tag">scripting engine</div>
+        <h3>ctx-based scripts.</h3>
+        <p>Each control binds to a script. Compiled with <code style="color:var(--text)">new Function</code>, sandboxed with try/catch. Access game globals through <code style="color:var(--text)">ctx.game</code> — no fragile hooks.</p>
+      </div>
+      <div class="ax-engine">
+        <div class="ax-engine-tag">session engine</div>
+        <h3>Headless bots.</h3>
+        <p>Spawn a Node bot per session. It keeps your character alive in zombs.io while you close the tab. Per-session protocol — every command carries an explicit sessionId.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="ax-section" id="features">
+    <div class="ax-section-title">why axiom</div>
+    <h2>Banshee's capabilities. Cleaner architecture.</h2>
+    <div class="ax-features">
+      <div class="ax-feature">
+        <div class="ax-feature-icon">↻</div>
+        <h3>Persistent sessions</h3>
+        <p>VPS bots that stay logged in. Reload the browser, reattach to the same character with the same state.</p>
+      </div>
+      <div class="ax-feature">
+        <div class="ax-feature-icon">⌕</div>
+        <h3>Search-first UI</h3>
+        <p>Type to filter every control across every tab. No more hunting through nested menus.</p>
+      </div>
+      <div class="ax-feature">
+        <div class="ax-feature-icon">⌧</div>
+        <h3>Per-session protocol</h3>
+        <p>Every wire command carries a sessionId. Toggles target exactly one bot. No implicit global state.</p>
+      </div>
+      <div class="ax-feature">
+        <div class="ax-feature-icon">⌗</div>
+        <h3>SQLite persistence</h3>
+        <p>Sessions, server flags, party-refiller PSKs — all survive <code style="color:var(--text-mute);font-family:var(--font-mono)">pm2 restart</code>.</p>
+      </div>
+      <div class="ax-feature">
+        <div class="ax-feature-icon">⌥</div>
+        <h3>JWT auth</h3>
+        <p>Per-user accounts. Multiple humans can run isolated session pools on the same install.</p>
+      </div>
+      <div class="ax-feature">
+        <div class="ax-feature-icon">▣</div>
+        <h3>Hot schema reload</h3>
+        <p>Edit the panel in the uiengine, see changes propagate to running clients instantly.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer class="ax-footer">
+    <span>axiom · self-hosted · no telemetry</span>
+    <span>
+      <a href="/play">Play</a>
+      <a href="/app">Dashboard</a>
+      <a href="https://github.com/axiom/axiom">GitHub</a>
+    </span>
+  </footer>
+
+</div>
+
+</body>
+</html>

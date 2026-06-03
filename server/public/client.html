@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Axiom — play</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48Y2lyY2xlIGN4PSI1MCIgY3k9IjUwIiByPSI0MCIgZmlsbD0iIzBhMGEwYiIgc3Ryb2tlPSIjZmZmZmZmIiBzdHJva2Utd2lkdGg9IjQiLz48L3N2Zz4=">
+  <link rel="stylesheet" href="/asset/app.css">
+  <link rel="stylesheet" href="/asset/axiom-shell.css">
+  <style>
+    /* Override the Banshee branding on the intro. We render our own
+       container under `.ax-intro` which Banshee doesn't style, so we
+       inherit the web theme rather than the pink/purple glow.
+       But Banshee's app.js still keys off `.hud-intro` to know when to
+       fade in/out — so we keep that as an empty stub. */
+    .hud-intro h1 { display: none !important; }
+    .hud-intro .hud-intro-wrapper { background: none !important; }
+
+    .ax-intro {
+      position: fixed; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      background:
+        radial-gradient(ellipse 80% 60% at 50% 0%, rgba(99,102,241,0.06), transparent 60%),
+        radial-gradient(ellipse 60% 50% at 50% 100%, rgba(168,85,247,0.04), transparent 60%),
+        #0a0a0b;
+      z-index: 100;
+    }
+    .ax-intro::before {
+      content: "";
+      position: absolute; inset: 0;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+      background-size: 48px 48px;
+      pointer-events: none;
+    }
+    .ax-intro-card {
+      position: relative;
+      width: 380px; max-width: 92vw;
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 32px 32px 28px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.04) inset;
+    }
+    .ax-intro-logo {
+      font: 600 18px/1 var(--font);
+      letter-spacing: 6px;
+      color: var(--text);
+      text-align: center;
+      margin-bottom: 4px;
+    }
+    .ax-intro-tagline {
+      font-size: 11px;
+      color: var(--text-dim);
+      text-align: center;
+      letter-spacing: 0.5px;
+      margin-bottom: 26px;
+    }
+    .ax-intro-back {
+      position: absolute; top: 18px; left: 18px;
+      color: var(--text-dim); text-decoration: none;
+      font: 11px var(--font-mono);
+      transition: color .1s;
+    }
+    .ax-intro-back:hover { color: var(--text); }
+    .ax-intro-status {
+      position: absolute; top: 18px; right: 22px;
+      display: inline-flex; align-items: center; gap: 6px;
+      font: 10px var(--font-mono); color: var(--text-dim);
+    }
+    .ax-intro-status-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--success);
+      box-shadow: 0 0 6px var(--success);
+    }
+  </style>
+</head>
+<body>
+
+<!-- Banshee's app.js (UiIntro component) queries `#hud-intro` for a
+     bunch of elements at boot — name, server, play button, the
+     disable-loading checkbox, the error span, player count. Missing
+     elements crash UiIntro. We render them here (hidden via CSS) and
+     mirror values into them from our visible .ax-intro card. -->
+<div id="hud-intro" class="hud-intro" style="display:none !important">
+  <div class="hud-intro-wrapper">
+    <h1>AXIOM</h1>
+    <h2 class="hud-intro-player-count">loading…</h2>
+    <div class="hud-intro-main">
+      <div class="hud-intro-left"><div class="session_saver"></div></div>
+      <div class="hud-intro-form">
+        <input type="text" name="nickname" class="hud-intro-name" id="hud-intro-name" maxlength="29">
+        <select class="hud-intro-server" name="server" id="hud-intro-server-hidden"></select>
+        <button type="submit" class="btn btn-green hud-intro-play">Play</button>
+        <span class="hud-intro-error"></span>
+        <label for="hud-intro-disable-loading">
+          <input type="checkbox" id="hud-intro-disable-loading" name="disableLoadingScreen" class="hud-intro-canvas" value="true">
+          <span>Disable Loading Screen</span>
+        </label>
+      </div>
+      <div class="hud-intro-guide"></div>
+    </div>
+  </div>
+</div>
+
+<!-- The clean web intro that's actually visible -->
+<div class="ax-intro" id="ax-intro">
+  <a href="/" class="ax-intro-back">← dashboard</a>
+  <span class="ax-intro-status"><span class="ax-intro-status-dot"></span>localhost</span>
+
+  <div class="ax-intro-card">
+    <div class="ax-intro-logo">AXIOM</div>
+    <div class="ax-intro-tagline">self-hosted zombs.io console</div>
+
+    <div class="ax-field">
+      <label>Nickname</label>
+      <input id="ax-nickname" class="ax-input" maxlength="29" placeholder="Your nickname…" autocomplete="off">
+    </div>
+    <div class="ax-field">
+      <label>Server</label>
+      <select id="ax-server" class="ax-input"></select>
+    </div>
+    <button id="ax-play" class="ax-btn primary" style="width: 100%; padding: 9px; margin-top: 6px; font-size: 13px">Play</button>
+    <div id="ax-play-error" style="color: var(--danger); font-size: 11px; min-height: 14px; margin-top: 8px; text-align: center"></div>
+    <label style="display: flex; align-items: center; gap: 6px; margin-top: 14px; color: var(--text-dim); font-size: 11px; cursor: pointer; justify-content: center">
+      <input type="checkbox" id="hud-intro-disable-loading" class="hud-intro-canvas" value="true">
+      <span>Disable loading screen</span>
+    </label>
+  </div>
+</div>
+
+<script>
+  // Lightweight error capture so we still see uncaught throws in dev,
+  // without the visible diagnostic strip taking up the page.
+  window.addEventListener("error",  (e) => console.error("[axiom/play]", e.error || e.message));
+  window.addEventListener("unhandledrejection", (e) => console.error("[axiom/play]", e.reason));
+
+  // Stub for Banshee-patched call sites in app.js that reference a
+  // global `user.connectedToId`.
+  window.user = window.user || { connectedToId: null };
+
+  // Tell Banshee's UiIntro to skip the session-loader animation. With
+  // this returning true, app.js does NOT hide entities/HUD components
+  // on Play — which removes the need for us to re-show them.
+  window.isBansheeSessionLoaderDisabled = () => true;
+  window.setBansheeSessionLoaderDisabled = () => {};
+  window.showBansheeSessionLoader = () => {};
+  window.hideBansheeSessionLoader = () => {};
+</script>
+
+<script src="/asset/pixi.js"></script>
+<script src="/asset/app.js?v=axiom"></script>
+<script src="/asset/server-list.js"></script>
+
+<script>
+  (() => {
+    const HOSTS = {
+      v1001:["45.76.4.28","zombs-2d4c041c-0.eggs.gg"], v1002:["45.77.203.204","zombs-2d4dcbcc-0.eggs.gg"],
+      v1003:["45.77.200.150","zombs-2d4dc896-0.eggs.gg"], v1004:["104.156.225.133","zombs-689ce185-0.eggs.gg"],
+      v1005:["45.77.149.224","zombs-2d4d95e0-0.eggs.gg"], v1006:["173.199.123.77","zombs-adc77b4d-0.eggs.gg"],
+      v1007:["45.76.166.32","zombs-2d4ca620-0.eggs.gg"], v1008:["149.28.58.193","zombs-951c3ac1-0.eggs.gg"],
+      v2001:["149.28.87.132","zombs-951c5784-0.eggs.gg"], v2002:["45.76.68.210","zombs-2d4c44d2-0.eggs.gg"],
+      v2003:["108.61.219.244","zombs-6c3ddbf4-0.eggs.gg"], v5001:["80.240.19.5","zombs-50f01305-0.eggs.gg"],
+      v5002:["45.77.53.65","zombs-2d4d3541-0.eggs.gg"], v5003:["95.179.167.12","zombs-5fb3a70c-0.eggs.gg"],
+      v5004:["95.179.163.97","zombs-5fb3a361-0.eggs.gg"], v5005:["136.244.83.44","zombs-88f4532c-0.eggs.gg"],
+      v5006:["45.32.158.210","zombs-2d209ed2-0.eggs.gg"], v5007:["95.179.169.17","zombs-5fb3a911-0.eggs.gg"],
+      v3001:["45.77.249.75","zombs-2d4df94b-0.eggs.gg"], v4001:["149.28.182.161","zombs-951cb6a1-0.eggs.gg"],
+      v4002:["149.28.165.199","zombs-951ca5c7-0.eggs.gg"],
+    };
+    const serverObj = {};
+    for (const [id, name] of window.AXIOM_SERVERS || []) {
+      const [ipAddress, host] = HOSTS[id] || ["", ""];
+      serverObj[id] = { id, region: name.split(" #")[0], name, hostname: ipAddress, host, ipAddress,
+                        port: 443, fallbackPort: 443, selected: false };
+    }
+
+    // Populate server <select> (visible) and the hidden hud-intro one.
+    const visibleSel = document.getElementById("ax-server");
+    const hiddenSel  = document.getElementById("hud-intro-server-hidden");
+    for (const [id, name] of (window.AXIOM_SERVERS || [])) {
+      [visibleSel, hiddenSel].forEach((sel) => {
+        const o = document.createElement("option");
+        o.value = id; o.textContent = `${id} — ${name}`;
+        if (id === "v5001") o.selected = true;
+        sel.appendChild(o);
+      });
+    }
+
+    // Instantiate the engine.
+    let GameClass;
+    try { GameClass = (0, eval)("typeof Game !== 'undefined' ? Game : null"); } catch {}
+    if (!GameClass) GameClass = window.Game;
+    if (!GameClass) {
+      document.getElementById("ax-play-error").textContent = "engine failed to load — check /asset/app.js";
+      return;
+    }
+    const game = new GameClass({ stage: "prod", servers: serverObj, userGroup: 2 });
+    // Must expose `window.game` BEFORE game.init() — Banshee patched
+    // UiIntro to reference a bare `game` global at construction time
+    // (app.js line 10533), and UiIntro is built inside Game.init().
+    window.game = game;
+    window.Game = GameClass;
+    game.init(() => {
+      try { game.debug && game.debug.init && game.debug.init(); } catch {}
+    });
+
+    const playBtn = document.getElementById("ax-play");
+    const errEl = document.getElementById("ax-play-error");
+    const intro = document.getElementById("ax-intro");
+
+    // ── Attach bridge ──────────────────────────────────────────────
+    // If the URL has ?attach=N, route the game's networking through
+    // the bot's sessions WS instead of dialing zombs.io directly.
+    // We mirror Banshee's User.applyVerifyData approach: replace
+    // game.network.socket with a fake socket that forwards via WS,
+    // and feed the bot's current world state into game.world.
+    const attachSid = parseInt(new URLSearchParams(location.search).get("attach"));
+    if (Number.isFinite(attachSid)) {
+      // No-login mode: hit /api/auth/local for a token if one isn't
+      // cached. Kicks off the attach asynchronously and exits the
+      // synchronous IIFE so normal Play wiring is skipped.
+      intro.style.display = "none";
+      (async () => {
+        let token = localStorage.getItem("axiom.token");
+        if (!token) {
+          try {
+            const r = await fetch("/api/auth/local");
+            if (r.ok) {
+              const j = await r.json();
+              token = j.token;
+              localStorage.setItem("axiom.token", token);
+            }
+          } catch {}
+        }
+        if (!token) {
+          document.getElementById("ax-play-error").textContent = "auth bootstrap failed";
+          return;
+        }
+        startAttachBridge(attachSid, token);
+      })();
+      return;
+    }
+
+    // ── Class structure mirrors Banshee's User in client.html:1468.
+    //    Same method names (sendPacket / sendBuffer / applyVerifyData
+    //    / onMessage / verify). The ONLY architectural delta from
+    //    Banshee is the [tag, sid_le4, payload] frame wrap on the
+    //    outbound socket — Axiom multiplexes many sessions on one WS,
+    //    Banshee uses one WS per verified session.
+    function startAttachBridge(sid, token) {
+      class AttachUser {
+        constructor(sid, token) {
+          this.sid = sid;
+          this.token = token;
+          this.connectedToId = sid;
+          this.ws = new WebSocket(`ws://${location.hostname}:8090`);
+          this.ws.binaryType = "arraybuffer";
+          this.ws.onopen    = this.onOpen.bind(this);
+          this.ws.onmessage = this.onMessage.bind(this);
+          this.ws.onclose   = this.onClose.bind(this);
+        }
+        // [tag, sid_le4, payload] frame for the server router. Axiom-
+        // specific — Banshee's plain [tag, payload] frame is replaced
+        // with this so we can multiplex.
+        _wrap(tag, payload) {
+          const out = new Uint8Array(5 + payload.length);
+          out[0] = tag;
+          out[1] = this.sid & 0xff; out[2] = (this.sid >>> 8) & 0xff;
+          out[3] = (this.sid >>> 16) & 0xff; out[4] = (this.sid >>> 24) & 0xff;
+          out.set(payload, 5);
+          return out;
+        }
+        // Banshee User.sendPacket — encode via codec, prefix tag 1.
+        sendPacket(opcode, data) {
+          let buffer;
+          try { buffer = new Uint8Array(game.network.codec.encode(opcode, data)); }
+          catch { return; }
+          if (this.ws.readyState === 1) this.ws.send(this._wrap(0x01, buffer));
+        }
+        // Banshee User.sendBuffer — raw bytes, prefix tag 2.
+        sendBuffer(buffer) {
+          const u8 = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+          if (this.ws.readyState === 1) this.ws.send(this._wrap(0x02, u8));
+        }
+        sendMessage(msg) {
+          if (this.ws.readyState === 1) this.ws.send(msg);
+        }
+        onOpen() {
+          // Axiom uses JWT instead of Banshee's shared salt.
+          this.sendMessage(JSON.stringify({ op: "auth", args: { token: this.token } }));
+        }
+        onClose() {
+          document.body.insertAdjacentHTML("afterbegin",
+            `<div style="position:fixed;top:8px;left:50%;transform:translateX(-50%);background:#26262c;color:#888;padding:6px 14px;border-radius:6px;font:12px var(--font);z-index:99999">attach disconnected</div>`);
+        }
+        // Banshee User.onMessage — first byte of a binary frame is the
+        // zombs.io opcode (0/9 for live forwards). String frames are
+        // control envelopes.
+        onMessage(m) {
+          // Binary forward from bot → strip our [tag,sid_le4] header,
+          // then handle exactly like Banshee's onMessage: if the next
+          // byte is opcode 0 or 9, decode + emit.
+          if (typeof m.data !== "string") {
+            const buf = new Uint8Array(m.data);
+            if (buf.length < 6) return;
+            const payload = buf.slice(5);   // skip [tag, sid_le4]
+            // Banshee's exact check — opcode 0 (entity update) or 9 (RPC).
+            if (payload[0] === 0 || payload[0] === 9) {
+              try {
+                const obj = game.network.codec.decode(payload);
+                if (obj.opcode === 0 || obj.opcode === 9) {
+                  game.network.emitter.emit(
+                    obj.opcode === 0 ? "PACKET_ENTITY_UPDATE" : "PACKET_RPC", obj
+                  );
+                }
+              } catch {}
+            }
+            return;
+          }
+          // JSON envelope — the Axiom-specific control plane.
+          let f;
+          try { f = JSON.parse(m.data); } catch { return; }
+          if (f.op === "ready") {
+            this.sendMessage(JSON.stringify({ op: "attach", sid: this.sid }));
+          } else if (f.op === "attached" && f.sid === this.sid) {
+            // Name the browser tab after the session's label so multiple
+            // attach tabs are distinguishable (e.g. "test 1", "test 2").
+            if (f.data && f.data.label) {
+              try { document.title = f.data.label + " · axiom"; } catch {}
+            }
+            this.applyVerifyData(f.data);
+          } else if (f.op === "error") {
+            document.body.insertAdjacentHTML("afterbegin",
+              `<div style="position:fixed;top:8px;left:50%;transform:translateX(-50%);background:#f87171;color:#000;padding:6px 14px;border-radius:6px;font:12px var(--font);z-index:99999">attach error: ${f.data?.reason || "unknown"}</div>`);
+          }
+        }
+        // ── Banshee User.applyVerifyData (client.html:1620), ported
+        //    line-for-line. The only structural delta is that the
+        //    codecJSON + jsons constants Banshee hardcodes are
+        //    replaced with sync.attributeMaps/sync.schemas — same
+        //    data, sourced from the bot's runtime instead of being
+        //    baked into the HTML.
+        applyVerifyData(payload) {
+          const data = (payload && payload.syncNeeds && payload.syncNeeds.entities)
+            ? payload.syncNeeds : payload;
+          if (!data || !data.entities) {
+            console.error("[attach] no sync data", payload); return;
+          }
+          try {
+            const codec = game.network.codec;
+            // Banshee: for (i in codecJSON) codec[i] = codecJSON[i];
+            // Axiom: same idea, sourcing from the bot's actual codec.
+            if (data.attributeMaps)   for (const k in data.attributeMaps)   codec.attributeMaps[k]   = data.attributeMaps[k];
+            if (data.entityTypeNames) for (const k in data.entityTypeNames) codec.entityTypeNames[k] = data.entityTypeNames[k];
+            if (data.rpcMapsByName)   for (const k in data.rpcMapsByName)   codec.rpcMapsByName[k]   = data.rpcMapsByName[k];
+            if (data.rpcMaps && data.rpcMaps.length) codec.rpcMaps = data.rpcMaps;
+            codec.sortedUidsByType    = data.sortedUidsByType || {};
+            codec.removedEntities     = data.removedEntities  || {};
+            // Banshee assigns these as plain Arrays — NOT Uint8Array.
+            // The engine codec mutates `.length` on them to grow/shrink
+            // during entity-update decode, and Uint8Array.length is
+            // a read-only getter, which would throw on every packet.
+            codec.absentEntitiesFlags = data.absentEntitiesFlags || [];
+            codec.updatedEntityFlags  = data.updatedEntityFlags  || [];
+            codec.entityTypeKeyList   = Object.keys(codec.sortedUidsByType);
+
+            // Banshee:
+            //   game.network.socket = { readyState: 1 };
+            //   game.network.socket.send = (e) => this.sendBuffer(new Uint8Array(e));
+            game.network.socket = { readyState: 1 };
+            game.network.socket.send = (e) => this.sendBuffer(new Uint8Array(e));
+            // Banshee:
+            //   game.network.sendPacket = (e, t) => {
+            //     if (e === 4 || e === 5 || e === 6 || e === 7) return;
+            //     this.sendPacket(e, t);
+            //   }
+            game.network.sendPacket = (e, t) => {
+              if (e === 4 || e === 5 || e === 6 || e === 7) return;
+              this.sendPacket(e, t);
+            };
+            game.network.connected = true;
+            game.options.serverId = data.serverId;
+            game.network.connectionOptions = serverObj[data.serverId];
+            document.useRequiredEquipment = true;
+
+            // Banshee uses `onMessage2(event)` which is just `emit`.
+            // Wrapped in try/catch so one throwing listener doesn't
+            // break the replay (this is an Axiom-specific safety net;
+            // Banshee just trusts every listener works).
+            const onMessage2 = (event) => {
+              const NAMES = { 0:"PACKET_ENTITY_UPDATE", 4:"PACKET_ENTER_WORLD",
+                              7:"PACKET_PING", 9:"PACKET_RPC" };
+              try { game.network.emitter.emit(NAMES[event.opcode], event); }
+              catch {}
+            };
+
+            // Banshee: for (i = 0; i < jsons.length; i++) onMessage2(jsons[i]);
+            // Axiom: same, sourced from sync.schemas instead of hardcoded `jsons`.
+            for (const name of ["BuildingShopPrices", "ItemShopPrices", "Spells"]) {
+              const s = data.schemas && data.schemas[name];
+              if (s) onMessage2({ opcode: 9, name: s.name, response: s.response });
+            }
+            // Banshee: for (i = 0; i < data.syncNeeds.length; i++) onMessage2(data.syncNeeds[i]);
+            for (const need of data.syncNeeds || []) onMessage2(need);
+            // Banshee: if (getElement("hud-chat-message").length === 0) { ... }
+            if (document.getElementsByClassName("hud-chat-message").length === 0) {
+              for (const m of data.messages || []) {
+                try { game.ui.components.Chat.onMessageReceived(m); } catch {}
+              }
+            }
+            if (data.isPaused) {
+              try {
+                game.ui.onLocalItemUpdate({ itemName: "Pause", tier: 1, stacks: 1 });
+                game.ui.emit("wavePaused");
+              } catch {}
+            }
+            // Banshee:
+            //   for (i in data.inventory) onMessage2({name:"SetItem", response:{...}, opcode:9});
+            for (const inv of data.inventory || []) {
+              onMessage2({ opcode: 9, name: "SetItem",
+                response: { itemName: inv.itemName, tier: inv.tier, stacks: inv.stacks } });
+            }
+            // Banshee:
+            //   const sessionEntities = new Map(data.entities);
+            //   onMessage2({tick: data.tick, entities: sessionEntities, byteSize, opcode: 0});
+            const sessionEntities = new Map(data.entities);
+            onMessage2({ opcode: 0, tick: data.tick,
+                         entities: sessionEntities, byteSize: data.byteSize || 0 });
+            // Banshee: for (i in game.ui.buildingUids_1) delete game.ui.buildingUids_1[i];
+            try { for (const k in game.ui.buildingUids_1) delete game.ui.buildingUids_1[k]; } catch {}
+            // Banshee: onMessage2({name:"LocalBuilding", response:data.localBuildings, opcode:9});
+            if (data.localBuildings && data.localBuildings.length) {
+              onMessage2({ opcode: 9, name: "LocalBuilding", response: data.localBuildings });
+            }
+            // Banshee: if (sessionEntities.get(data.syncNeeds[0].uid)?.dead) Respawn.show();
+            const meTick = sessionEntities.get((data.syncNeeds && data.syncNeeds[0] && data.syncNeeds[0].uid) || 0);
+            if (meTick && meTick.dead) {
+              try { game.ui.components.Respawn.show(); } catch {}
+            }
+            // Banshee: game.world.entities.forEach(e => { if (sessionEntities.get(e.uid)) { delete; fade; } });
+            try {
+              game.world.entities.forEach((e) => {
+                if (sessionEntities.get(e.uid)) {
+                  game.world.entities.delete(e.uid);
+                  if (game.world.beginRemovedEntityFade) game.world.beginRemovedEntityFade(e);
+                }
+              });
+            } catch {}
+            // Axiom-specific: force HUD regions on + InputManager on
+            // (Banshee relies on the engine's enter-world handler to
+            // do this; we make it idempotent in case any listener earlier
+            // in the replay throws and aborts that path).
+            for (const c of ["hud-top-left","hud-top-center","hud-top-right",
+                             "hud-center-left","hud-center-right",
+                             "hud-bottom-left","hud-bottom-center","hud-bottom-right"]) {
+              const el = document.getElementsByClassName(c)[0];
+              if (el) el.style.display = "flex";
+            }
+            try { game.renderer.entities.setVisible(true); } catch {}
+            try {
+              if (game.inputManager?.setEnabled) game.inputManager.setEnabled(true);
+              if (game.inputPacketCreator?.setEnabled) game.inputPacketCreator.setEnabled(true);
+            } catch {}
+          } catch (e) {
+            console.error("[attach] applyVerifyData failed", e);
+            document.body.insertAdjacentHTML("afterbegin",
+              `<div style="position:fixed;top:8px;left:50%;transform:translateX(-50%);background:#f87171;color:#000;padding:6px 14px;border-radius:6px;font:12px var(--font);z-index:99999">attach apply failed: ${e.message}</div>`);
+          }
+        }
+      }
+
+      const user = new AttachUser(sid, token);
+      window.attachUser = user;
+      const ws = user.ws;  // alias for the rest of this scope
+    }
+
+    playBtn.onclick = () => {
+      const name = document.getElementById("ax-nickname").value.trim();
+      if (!name) { errEl.textContent = "nickname required"; return; }
+      errEl.textContent = "";
+
+      // Mirror visible inputs into the hidden hud-intro tree, then
+      // trigger Banshee's built-in submit. That path passes the right
+      // server config into game.network.connect(server) and uses
+      // app.js's full join flow — none of which we want to reimplement.
+      document.getElementById("hud-intro-name").value = name;
+      hiddenSel.value = visibleSel.value;
+      document.getElementsByClassName("hud-intro-play")[0].click();
+
+      // Hide our card so the game canvas is visible.
+      intro.style.display = "none";
+
+      // Defense: the 8 HUD regions default to display:none in
+      // Banshee's app.css and only flip to flex through specific code
+      // paths. Force them visible for the first 2 seconds.
+      const HUD_REGIONS = ["hud-top-left","hud-top-center","hud-top-right",
+                           "hud-center-left","hud-center-right",
+                           "hud-bottom-left","hud-bottom-center","hud-bottom-right"];
+      const t0 = Date.now();
+      const poke = () => {
+        for (const c of HUD_REGIONS) {
+          const el = document.getElementsByClassName(c)[0];
+          if (el) el.style.display = "flex";
+        }
+        // Entities should remain visible because we stubbed
+        // isBansheeSessionLoaderDisabled, but belt-and-suspenders:
+        try { game.renderer.entities.setVisible(true); } catch {}
+        if (Date.now() - t0 < 2000) requestAnimationFrame(poke);
+      };
+      requestAnimationFrame(poke);
+    };
+    document.getElementById("ax-nickname").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") playBtn.click();
+    });
+  })();
+</script>
+<script src="/asset/axiom-panel.js"></script>
+
+</body>
+</html>

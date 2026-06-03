@@ -1,0 +1,25 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<svg width="61" height="61" viewBox="0 0 67 67" xmlns="http://www.w3.org/2000/svg">
+  <defs><radialGradient id="yellowZombieT7Body" cx="32%" cy="28%" r="78%"><stop offset="0" stop-color="#fce071"/><stop offset=".34" stop-color="#d1b236"/><stop offset=".78" stop-color="#241722"/><stop offset="1" stop-color="#08070d"/></radialGradient><style>.cls-1,.base{fill:url(#yellowZombieT7Body);stroke:#333333;stroke-miterlimit:10;stroke-width:8px;}.gloss{fill:#fce071;opacity:.44;}</style></defs>
+  <g id="Layer_2" data-name="Layer 2" transform="matrix(0.837706, 0, 0, 0.837706, 1.101796, 1.102406)">
+    <circle class="cls-1" cx="28.64" cy="76.72" r="34.59" transform="translate(-39.72 62.55) rotate(-86.54)" style="stroke-width: 8.35615;"/>
+  </g>
+
+  <g class="space-zombie-helmet-ring">
+    <ellipse cx="33.50" cy="33.84" rx="27.14" ry="27.14" fill="none" stroke="#f5f0ff" stroke-width="2.35" opacity="0.48"/>
+    <ellipse cx="32.80" cy="32.94" rx="23.88" ry="23.88" fill="#dceaff" opacity="0.055"/>
+    <path d="M19.39 14.84 C28.62 8.06 43.00 9.96 50.32 20.81" fill="none" stroke="#ffffff" stroke-width="1.06" stroke-linecap="round" opacity="0.40"/>
+    <circle cx="46.52" cy="18.91" r="1.06" fill="#ffffff" opacity="0.44"/>
+  </g>
+<g class="space-zombie-speckles">
+    <circle cx="13.40" cy="20.77" r="1.21" fill="#f6e5a3" opacity="0.48"/>
+    <circle cx="48.24" cy="14.74" r="0.94" fill="#f9eebf" opacity="0.42"/>
+    <circle cx="56.28" cy="41.54" r="0.80" fill="#796276" opacity="0.44"/>
+    <circle cx="21.44" cy="52.26" r="0.87" fill="#16121a" opacity="0.52"/>
+    <circle cx="34.84" cy="8.04" r="0.67" fill="#fef9e1" opacity="0.36"/>
+    <circle cx="8.04" cy="36.85" r="0.67" fill="#4b3540" opacity="0.46"/>
+    <circle cx="45.56" cy="54.94" r="0.74" fill="#c5b881" opacity="0.42"/>
+    <circle cx="30.82" cy="42.88" r="0.60" fill="#f6f0db" opacity="0.34"/>
+
+</g>
+</svg>

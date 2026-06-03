@@ -1,0 +1,10 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<svg width="51" height="51" viewBox="0 0 57 57" xmlns="http://www.w3.org/2000/svg">
+  <defs><radialGradient id="redZombieT5Body" cx="32%" cy="28%" r="76%"><stop offset="0" stop-color="#db3b3b"/><stop offset=".5" stop-color="#9e2a2a"/><stop offset="1" stop-color="#401616"/></radialGradient><style>.cls-1,.base{fill:url(#redZombieT5Body);stroke:#1b1414;stroke-miterlimit:10;stroke-width:8px;}.gloss{fill:#f37272;opacity:0.42;}</style></defs>
+  <g id="Layer_2" data-name="Layer 2" transform="matrix(0.701219, 0, 0, 0.701219, 1.371236, 1.37236)">
+    <circle class="cls-1" cx="28.64" cy="76.72" r="34.59" transform="translate(-39.72 62.55) rotate(-86.54)" style="stroke-width: 9.98262;"/>
+  </g>
+  <path class="gloss" d="M18 31c4.2 1.4 8.8 1.2 13.5-.6"/>
+  
+</svg>
+

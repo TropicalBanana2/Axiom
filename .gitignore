@@ -1,0 +1,30 @@
+# ── Dependencies ───────────────────────────────────────────────
+node_modules/
+**/node_modules/
+
+# ── Build output ───────────────────────────────────────────────
+dist/
+editor/dist/
+*.tsbuildinfo
+
+# ── Runtime data & secrets (NEVER commit) ──────────────────────
+server/data/jwt.secret
+server/data/*.db
+server/data/*.db-shm
+server/data/*.db-wal
+*.secret
+
+# ── Logs ───────────────────────────────────────────────────────
+*.log
+logs/
+.pm2/
+
+# ── Editor / local dev ─────────────────────────────────────────
+editor/.axiom-dev.json
+.vscode/
+.idea/
+
+# ── OS cruft ───────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini

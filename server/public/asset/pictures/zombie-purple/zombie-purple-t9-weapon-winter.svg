@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg width="180" height="52" viewBox="-85 -11 308 88" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>.cls-1{fill:#9fb2c8;}.cls-1,.cls-2,.cls-4{stroke:#1e263d;stroke-miterlimit:10;stroke-width:9px;}.cls-2{fill:#d7e8f5;}.cls-3{fill:#34415f;opacity:0.7;}.cls-4{fill:#d9f0ff;}</style>
+    <style>.cls-1{fill:#d7e8f5;}.cls-1,.cls-2,.cls-4{stroke:#1e263d;stroke-miterlimit:10;stroke-width:9px;}.cls-2{fill:#9fb2c8;}.cls-3{fill:#34415f;}.cls-4{fill:#d9f0ff;}</style>
+    <style>.cls-1{fill:#d7e8f5;}.cls-1,.cls-3,.cls-4{stroke:#1e263d;stroke-miterlimit:10;stroke-width:9px;}.cls-2{fill:#34415f;opacity:0.7;}.cls-3{fill:#9fb2c8;}.cls-4{fill:#d9f0ff;}</style>
+    <linearGradient id="whiteAxeGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="35%" stop-color="#dbeaf5"/>
+      <stop offset="48%" stop-color="#8ea8c0"/>
+      <stop offset="58%" stop-color="#2a3554"/>
+      <stop offset="100%" stop-color="#182039"/>
+    </linearGradient>
+    <filter id="softWhiteAxeGlint" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur stdDeviation="1" result="blur"/>
+      <feFlood flood-color="#ffffff" flood-opacity=".42" result="color"/>
+      <feComposite in="color" in2="blur" operator="in" result="glow"/>
+      <feMerge><feMergeNode in="glow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="whiteAxeGlow" x="-45%" y="-45%" width="190%" height="190%">
+      <feGaussianBlur stdDeviation="2.4" result="blur"/>
+      <feFlood flood-color="#e8f8ff" flood-opacity=".34" result="color"/>
+      <feComposite in="color" in2="blur" operator="in" result="glow"/>
+      <feMerge><feMergeNode in="glow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  <style>.purple-hand-glint{fill:#ffffff;opacity:.13;stroke-width:0;}.axe-glint{fill:none;stroke:#ffffff;stroke-width:4.2;stroke-linecap:round;stroke-linejoin:round;opacity:.6;}.axe-shadow-glint{fill:none;stroke:#1e263d;stroke-width:3.5;stroke-linecap:round;stroke-linejoin:round;opacity:.55;}</style></defs>
+  <g id="weapons" transform="matrix(1, 0, 0, 1, -0.177919, -7.342737)">
+    <path class="cls-1" filter="url(#whiteAxeGlow)" style="fill:url(#whiteAxeGradient)" d="M137.47,32.41H105.92a3.91,3.91,0,0,1-3.75-2.8L94.05,2.27a3.91,3.91,0,0,1,3.75-5h47.77a3.91,3.91,0,0,1,3.75,5l-8.11,27.34A3.91,3.91,0,0,1,137.47,32.41Z" transform="translate(39.65 6.76)"/>
+    <path class="cls-1" filter="url(#whiteAxeGlow)" style="fill:url(#whiteAxeGradient)" d="M137.47,34.24H105.92a3.91,3.91,0,0,0-3.75,2.8L94.05,64.38a3.91,3.91,0,0,0,3.75,5h47.77a3.91,3.91,0,0,0,3.75-5L141.22,37A3.91,3.91,0,0,0,137.47,34.24Z" transform="translate(39.65 6.76)"/>
+    <rect class="cls-2" x="137.43" y="69.01" width="47.83" height="4.35" style="stroke-width: 0;"/>
+    <rect class="cls-3" x="4" y="35.13" width="140.41" height="9.15" rx="4.03" ry="4.03" style="opacity: 1;"/>
+    <path class="cls-1" filter="url(#whiteAxeGlow)" style="fill:url(#whiteAxeGradient)" d="M149.79,26h-49a4.26,4.26,0,0,0-1.16.16L89.56,29a4.26,4.26,0,0,0,0,8.19l10.09,2.86a4.26,4.26,0,0,0,1.16.16h49a4.26,4.26,0,0,0,1.16-.16L161,37.22A4.26,4.26,0,0,0,161,29L151,26.16A4.26,4.26,0,0,0,149.79,26Z" transform="translate(39.65 6.76)"/>
+    <path class="axe-glint" filter="url(#softWhiteAxeGlint)" d="M144 12 L169 13"/>
+    <path class="axe-glint" filter="url(#softWhiteAxeGlint)" d="M143 58 L171 56"/>
+    <path class="axe-shadow-glint" d="M178 17 L190 24"/>
+    <path class="axe-shadow-glint" d="M178 52 L190 45"/>
+    <circle class="cls-4" cx="-3.67" cy="43.22" r="17.31" transform="translate(-6.94 43.7) rotate(-86.54)"/>
+    <circle class="cls-4" cx="62.7" cy="43.03" r="17.31" transform="translate(55.62 109.77) rotate(-86.54)"/>
+  </g>
+  <ellipse class="purple-hand-glint" cx="-8" cy="36" rx="8" ry="3.3" transform="rotate(-24 -8 36)"/><ellipse class="purple-hand-glint" cx="58" cy="36" rx="8" ry="3.3" transform="rotate(-24 58 36)"/>
+</svg>

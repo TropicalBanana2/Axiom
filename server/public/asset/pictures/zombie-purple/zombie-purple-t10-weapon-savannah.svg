@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg width="150" height="54" viewBox="0 0 308 110" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>.cls-1{fill:#7b3ca5;}.cls-1,.cls-2,.cls-3{stroke:#1c1621;stroke-miterlimit:10;stroke-width:12px;}.cls-2{fill:#5b5348;}.cls-3{fill:#884bb0;}</style>
+    <linearGradient id="bloodAxeGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#280d3a"/>
+      <stop offset="42%" stop-color="#5c1b87"/>
+      <stop offset="70%" stop-color="#210c2f"/>
+      <stop offset="100%" stop-color="#100604"/>
+    </linearGradient>
+    <filter id="whiteAxeGlint" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="1.2" result="blur"/>
+      <feFlood flood-color="#e0bcf9" flood-opacity=".5" result="color"/>
+      <feComposite in="color" in2="blur" operator="in" result="glow"/>
+      <feMerge><feMergeNode in="glow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  <style>.purple-hand-glint{fill:#6c2e96;opacity:.12;stroke-width:0;}.axe-white-glint{fill:none;stroke:#e0bcf9;stroke-width:5;stroke-linecap:round;stroke-linejoin:round;opacity:.55;}</style></defs>
+  <rect class="cls-1" x="76.761" y="33.24" width="162.94" height="11.46" rx="4.03" ry="4.03"/>
+  <polygon class="cls-2" style="fill:url(#bloodAxeGradient)" points="267.071 4.43 279.121 10.18 291.711 14.64 296.171 27.23 301.921 39.28 296.171 51.34 291.711 63.92 279.121 68.38 267.071 74.13 255.011 68.38 242.421 63.92 237.971 51.34 232.221 39.28 237.971 27.23 242.421 14.64 255.011 10.18 267.071 4.43"/>
+  <g style="fill:none;stroke:#18121d;stroke-width:7;stroke-linecap:round;stroke-linejoin:round;opacity:.95">
+    <path d="M250 29 L262 34"/>
+    <path d="M284 29 L272 34"/>
+    <path d="M254 52 Q267 43 281 52"/>
+  </g>
+  <path class="axe-white-glint" filter="url(#whiteAxeGlint)" d="M255 13 L276 20 L292 31"/>
+  <path class="axe-white-glint" filter="url(#whiteAxeGlint)" d="M242 51 L255 60"/>
+  <circle class="cls-3" cx="-16.01" cy="31.21" r="22.66" transform="matrix(0.060352, -0.998177, 0.998177, 0.060352, 79.561317, 33.040001)"/>
+  <circle class="cls-3" cx="70.87" cy="30.96" r="22.66" transform="matrix(0.060352, -0.998177, 0.998177, 0.060352, 161.451601, 119.530008)"/>
+  <ellipse class="purple-hand-glint" cx="-21" cy="24" rx="10" ry="4" transform="rotate(-24 -21 24)"/><ellipse class="purple-hand-glint" cx="66" cy="24" rx="10" ry="4" transform="rotate(-24 66 24)"/>
+</svg>

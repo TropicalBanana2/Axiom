@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg width="94" height="30" viewBox="0 0 126 40" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .outer{fill:#2a221b;stroke:#1b1714;stroke-miterlimit:10;stroke-width:8px}
+      .core{fill:#5b3320}
+      .hot{fill:#b4662e}
+      .cool{fill:#4d463d}
+    </style>
+  </defs>
+  <circle class="outer" cx="44.28" cy="16.13" r="9.5"/>
+  <circle class="outer" cx="80.72" cy="16.04" r="9.5"/>
+  <circle class="core" cx="44.28" cy="16.13" r="6.4"/>
+  <circle class="core" cx="80.72" cy="16.04" r="6.4"/>
+  <path class="hot" d="M40.1 13.2c2.2-1.4 5.3-1.3 7.6.3-1.7-.4-3.6-.3-5.1.4-1 .5-1.8.9-2.5.7-.6-.2-.6-.9 0-1.4Z"/>
+  <path class="hot" d="M76.5 13.1c2.3-1.4 5.5-1.2 7.8.4-1.8-.4-3.7-.3-5.2.4-1 .5-1.9.9-2.6.7-.6-.2-.6-1 0-1.5Z"/>
+  <path class="cool" d="M48.4 19.4c-2.2 2-6.1 1.9-8.2-.2 2.9.8 5.5.7 8.2.2Z"/>
+  <path class="cool" d="M84.8 19.3c-2.2 2-6.1 1.9-8.2-.2 2.9.8 5.5.7 8.2.2Z"/>
+</svg>

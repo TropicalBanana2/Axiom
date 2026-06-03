@@ -1,0 +1,11 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<svg width="51" height="51" viewBox="0 0 57 57" xmlns="http://www.w3.org/2000/svg">
+  <defs><radialGradient id="blueZombieT4Body" cx="32%" cy="28%" r="76%"><stop offset="0" stop-color="#e1f1fe"/><stop offset=".24" stop-color="#73befc"/><stop offset=".55" stop-color="#2884d0"/><stop offset=".82" stop-color="#23445e"/><stop offset="1" stop-color="#151622"/></radialGradient><style>.cls-1,.base{fill:url(#blueZombieT4Body);stroke:#25242d;stroke-miterlimit:10;stroke-width:8px;}.gloss{fill:#e1f1fe;opacity:.24;}</style></defs>
+  <g id="Layer_2" data-name="Layer 2" transform="matrix(0.701219, 0, 0, 0.701219, 1.371236, 1.37236)">
+    <circle class="cls-1" cx="28.64" cy="76.72" r="34.59" transform="translate(-39.72 62.55) rotate(-86.54)" style="stroke-width: 9.98262;"/>
+  </g>
+  
+
+  <path class="gloss" d="M15.5 21.5c5.4-3 13.2-2.6 18 .9-5.3-.9-10.9-.2-15.1 1.8-2 .9-3.4.1-2.9-2.7Z"/>
+</svg>
+

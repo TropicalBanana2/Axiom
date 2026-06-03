@@ -1,0 +1,5 @@
+﻿<svg width="45" height="45" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 57.58 57.58">
+  <defs><radialGradient id="greenZombieT1Body" cx="32%" cy="28%" r="76%"><stop offset="0" stop-color="#38d557"/><stop offset=".5" stop-color="#1d8331"/><stop offset="1" stop-color="#123219"/></radialGradient><style>.cls-1,.base{fill:url(#greenZombieT1Body);stroke:#162118;stroke-miterlimit:10;stroke-width:8px;}.gloss{fill:#4be169;opacity:0.46;}</style></defs>
+  <circle class="base" cx="29.62" cy="32.9" r="24.79" transform="translate(-5.84 56.37) rotate(-86.54)"/>
+</svg>
+

@@ -1,0 +1,26 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<svg width="150" height="42" viewBox="0 0 260 70" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="spaceBubbleWeaponGlass" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f4ecff" stop-opacity="0.82"/>
+      <stop offset="32%" stop-color="#9aa3bf" stop-opacity="0.64"/>
+      <stop offset="65%" stop-color="#322b43" stop-opacity="0.86"/>
+      <stop offset="100%" stop-color="#080711" stop-opacity="1"/>
+    </linearGradient>
+    <radialGradient id="spaceBubbleWeaponHot" cx="35%" cy="26%" r="76%">
+      <stop offset="0%" stop-color="#fff4d6" stop-opacity="0.86"/>
+      <stop offset="38%" stop-color="#b08f88" stop-opacity="0.64"/>
+      <stop offset="75%" stop-color="#2c263a" stop-opacity="0.88"/>
+      <stop offset="100%" stop-color="#080711" stop-opacity="1"/>
+    </radialGradient>
+<linearGradient id="bloodAxeGradient" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#595471"/><stop offset="45%" stop-color="#b9b1c9"/><stop offset="100%" stop-color="#1a1a28"/></linearGradient>
+    <style>.cls-1{fill:url(#spaceBubbleWeaponGlass);}.cls-1,.cls-2,.cls-3{stroke:#151622;stroke-miterlimit:10;stroke-width:8px;}.cls-2{fill:url(#spaceBubbleWeaponGlass);}.cls-3{fill:url(#spaceBubbleWeaponHot);}</style>
+    <style>.cls-1{fill:url(#spaceBubbleWeaponGlass);}.cls-1,.cls-2,.cls-3{stroke:#151622;stroke-miterlimit:10;stroke-width:8px;}.cls-2{fill:url(#spaceBubbleWeaponGlass);}.cls-3{fill:url(#spaceBubbleWeaponHot);}</style>
+    <style>.cls-1{fill:url(#spaceBubbleWeaponGlass);}.cls-1,.cls-2,.cls-4{stroke:#151622;stroke-miterlimit:10;stroke-width:8px;}.cls-2{fill:url(#spaceBubbleWeaponGlass);}.cls-3{fill:url(#spaceBubbleWeaponHot);opacity:0.7;}.cls-4{fill:#322b43;}</style>
+  <style></style></defs>
+  <rect class="cls-1" x="79.706" y="28.811" width="118.19" height="10.83" rx="4.03" ry="4.03"/>
+  <rect class="cls-2" style="fill:url(#spaceBubbleWeaponGlass)" x="187.896" y="4.641" width="63" height="44" rx="6.36" ry="6.36"/>
+  <rect class="cls-3" x="191.896" y="7.641" width="55" height="5" style="fill:#ffe1a9;stroke: #f0d7ae; stroke-width: 0;"/>
+  <circle class="cls-4" cx="24.66" cy="46.29" r="13.25" transform="matrix(0.060352, -0.998177, 0.998177, 0.060352, 54.856014, 60.760101)"/>
+  <circle class="cls-4" cx="75.47" cy="46.14" r="13.25" transform="matrix(0.060352, -0.998177, 0.998178, 0.060352, 102.74601, 111.330086)"/>
+</svg>

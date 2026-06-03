@@ -1,0 +1,24 @@
+{
+  "name": "axiom-uiengine",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Axiom uiengine — schema-driven UI editor for the Axiom userscript",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "export": "node scripts/cli-export.js"
+  },
+  "dependencies": {
+    "@monaco-editor/react": "^4.6.0",
+    "monaco-editor": "^0.46.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zustand": "^4.5.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.11"
+  }
+}

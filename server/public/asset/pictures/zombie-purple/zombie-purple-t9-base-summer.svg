@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg width="61" height="61" viewBox="0 0 67 67" xmlns="http://www.w3.org/2000/svg">
+  <defs><radialGradient id="purpleZombieT9Body" cx="32%" cy="28%" r="76%"><stop offset="0" stop-color="#9e3be0"/><stop offset=".5" stop-color="#781eb5"/><stop offset="1" stop-color="#321447"/></radialGradient><style>.cls-1,.base{fill:url(#purpleZombieT9Body);stroke:#333333;stroke-miterlimit:10;stroke-width:8px;}.gloss{fill:#a043df;opacity:.14;}.shade{fill:none;stroke:#311643;stroke-width:2.5px;stroke-linecap:round;opacity:.38;}</style></defs>
+  <g id="Layer_2" data-name="Layer 2" transform="matrix(0.837706, 0, 0, 0.837706, 1.101796, 1.102406)">
+    <circle class="cls-1" cx="28.64" cy="76.72" r="34.59" transform="translate(-39.72 62.55) rotate(-86.54)" style="stroke-width: 8.35615;"/>
+  </g>
+</svg>

@@ -1,0 +1,4 @@
+node_modules
+dist
+.axiom-dev.json
+.DS_Store
