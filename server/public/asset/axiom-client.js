@@ -1,8 +1,8 @@
-/* axiom-client.js — landing page client logic.
+/* axiom-client.js — dashboard client logic.
  *
  * Responsibilities:
- *   - login / register against the HTTP API
- *   - open the sessions WS, render the session list
+ *   - fetch a local token (no-login mode), open the sessions WS
+ *   - render the session list
  *   - global search (Ctrl+K) — searches sessions, servers, features
  *   - "play" button opens /play (modded client) in a new tab
  *   - new-session modal + spawn flow
@@ -40,13 +40,10 @@
   };
 
   // ----- auth (no-login mode) -----
-  // The auth UI is left in the DOM for backward compat but never opens.
-  // On boot we hit /api/auth/local for a token. The hidden logout button
-  // is repurposed as "reset" — clears token + reloads (server reissues).
+  // On boot we hit /api/auth/local for a token. The "reset" button clears
+  // the stored token and reloads (the server reissues a fresh one).
   const logoutBtn = $("#logout-btn");
   if (logoutBtn) {
-    logoutBtn.textContent = "reset";
-    logoutBtn.title = "Clear local token + reload";
     logoutBtn.onclick = () => {
       localStorage.removeItem("axiom.token");
       location.reload();
@@ -66,10 +63,8 @@
     try {
       const me = await api("/api/me");
       state.user = me;
-    } catch { return showLogin(); }
-    $("#auth-modal").classList.remove("open");
+    } catch { return resetToken(); }
     $("#app").style.display = "grid";
-    $("#user-name").textContent = state.user.username;
     populateServers();
     renderMain();
     renderServerToggles();
@@ -82,11 +77,10 @@
     renderPartyRefiller();
     openWs();
   }
-  // In no-login mode there's no login form to show. A 401 means the
-  // token in localStorage was issued under a different jwt.secret
-  // (e.g. the server rotated). Clear it and reload — the boot path
+  // A 401 means the stored token was issued under a different jwt.secret
+  // (e.g. the server rotated it). Clear it and reload — the boot path
   // auto-fetches a fresh one.
-  function showLogin() {
+  function resetToken() {
     localStorage.removeItem("axiom.token");
     location.reload();
   }
@@ -100,7 +94,7 @@
         ...(opts.headers || {}),
       },
     });
-    if (r.status === 401) { showLogin(); throw new Error("unauthorized"); }
+    if (r.status === 401) { resetToken(); throw new Error("unauthorized"); }
     if (!r.ok) throw new Error((await r.json()).error || "request failed");
     return r.json();
   }
@@ -1153,9 +1147,8 @@
 
   // ----- boot -----
   // No-login mode: auto-fetch a token if we don't have one, then enter.
-  // Any stored token that the server later rejects falls through to a
-  // fresh one (the API helper still calls showLogin on 401 — overridden
-  // below to retry-with-fresh-token instead).
+  // Any stored token the server later rejects (401) falls through to
+  // resetToken(), which clears it and reloads for a fresh one.
   (async () => {
     try {
       await ensureLocalToken();

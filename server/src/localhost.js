@@ -1,7 +1,7 @@
 // localhost.js — Axiom HTTP host on :80.
 //
-// Serves the modded zombs.io page from public/, exposes REST endpoints
-// for login/register, proxies the zombs.io leaderboard, and serves the
+// Serves the modded zombs.io page from public/, hands out a local-user
+// token (no-login mode), proxies the zombs.io leaderboard, and serves the
 // active schema (which the in-game panel pulls on boot).
 
 const path = require("path");

@@ -18,8 +18,7 @@
       <span class="ax-search-kbd">Ctrl K</span>
     </div>
     <div class="ax-top-user">
-      <span id="user-name"></span>
-      <button class="ax-btn ghost" id="logout-btn">reset</button>
+      <button class="ax-btn ghost" id="logout-btn" title="Clear local token + reload">reset</button>
     </div>
   </div>
 
@@ -64,20 +63,6 @@
     <span id="ws-host">ws://localhost:8090</span>
     <span style="flex: 1"></span>
     <span>axiom v0.1 · localhost</span>
-  </div>
-</div>
-
-<!-- Login modal — kept in DOM (axiom-client still references its IDs
-     for the showLogin/reload fallback) but never opens. Removed the
-     `open` class so it stays hidden on first paint. -->
-<div class="ax-modal-bg" id="auth-modal" style="display:none">
-  <div class="ax-modal">
-    <h2 id="auth-title" hidden></h2>
-    <input id="auth-user" hidden>
-    <input id="auth-pass" hidden>
-    <button id="auth-submit" hidden></button>
-    <button id="auth-switch" hidden></button>
-    <span id="auth-error" hidden></span>
   </div>
 </div>
 

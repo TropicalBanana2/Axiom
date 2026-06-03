@@ -874,12 +874,7 @@ for (const p of parties) {
 }
 ctx.toast('granted sell perms to all party members');`),
 
-  // ── Quick reference ──
-  scr_hello: scr("scr_hello", "Hello",
-    `ctx.log('hello from axiom');
-ctx.toast('hello');`),
-
-  // ── Base Saver (port of D:/axiom/autobuilder.js) ──
+  // ── Base Saver ──
   // One script dispatches every BaseSaver action via controlId so all
   // controls share state (the saved bases + pins) without recompiling
   // logic across multiple scripts. Bases persist in localStorage at
@@ -1164,7 +1159,7 @@ else if (controlId === 'bs-unpin') {
 };
 
 const DEFAULT_SCHEMA = {
-  schemaVersion: 11,
+  schemaVersion: 12,
   meta: {
     name: "Axiom",
     version: "0.1.0",
@@ -1407,8 +1402,7 @@ const DEFAULT_SCHEMA = {
               defaultValue:
                 "Axiom — search-first scripting console.\n" +
                 "Hotkey: ` to toggle. Type in the search bar to filter every tab's controls live.\n" +
-                "Persistent sessions live on the localhost Sessions tab (browser homepage)." },
-            { type: "button", id: "home-hello", label: "Test script", scriptId: "scr_hello" },
+                "Persistent sessions live on the localhost dashboard (browser homepage)." },
           ],
         },
       ],
