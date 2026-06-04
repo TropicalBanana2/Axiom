@@ -918,17 +918,22 @@ const members = (game && game.ui && game.ui.getPlayerPartyMembers)
   ? (game.ui.getPlayerPartyMembers() || []) : null;
 if (!members) { ctx.toast('Give Sell: attach to a session first'); return; }
 const myUid = game.world && game.world.myUid;
-let n = 0;
-for (const m of members) {
-  if (!m || m.playerUid === myUid) continue;   // skip self
-  if (m.canSell === 1) continue;               // already granted
-  try {
-    game.network.sendRpc({ name: 'SetPartyMemberCanSell', uid: m.playerUid, canSell: 1 });
-    n++;
-  } catch {}
-}
-ctx.toast(n ? ('granted sell perms to ' + n + ' member' + (n === 1 ? '' : 's'))
-            : 'no members needed granting (or party empty)');`),
+const targets = members.filter((m) => m && m.playerUid !== myUid && m.canSell !== 1);
+if (!targets.length) { ctx.toast('Give Sell: nobody to grant'); return; }
+// The server only registers ONE SetPartyMemberCanSell per network flush,
+// so a synchronous loop granted just the first member. Stagger the RPCs
+// ~180 ms apart so every member is granted.
+let i = 0;
+const grantNext = () => {
+  if (i >= targets.length) {
+    ctx.toast('granted sell perms to ' + targets.length + ' member' + (targets.length === 1 ? '' : 's'));
+    return;
+  }
+  const m = targets[i++];
+  try { game.network.sendRpc({ name: 'SetPartyMemberCanSell', uid: m.playerUid, canSell: 1 }); } catch {}
+  setTimeout(grantNext, 180);
+};
+grantNext();`),
 
   // ── Base Saver ──
   // One script dispatches every BaseSaver action via controlId so all
@@ -1215,7 +1220,7 @@ else if (controlId === 'bs-unpin') {
 };
 
 const DEFAULT_SCHEMA = {
-  schemaVersion: 13,
+  schemaVersion: 14,
   meta: {
     name: "Axiom",
     version: "0.1.0",
@@ -1241,8 +1246,6 @@ const DEFAULT_SCHEMA = {
               ] },
             { type: "toggle", id: "combat-autobow", label: "Auto Bow", scriptId: "scr_autobow",
               tooltip: "Equips Bow + auto-fires when an enemy is in range." },
-            { type: "toggle", id: "combat-autorespawn", label: "Auto Respawn", scriptId: "scr_autorespawn",
-              tooltip: "Re-clicks the respawn button on death." },
           ],
         },
         {
@@ -1252,15 +1255,8 @@ const DEFAULT_SCHEMA = {
               tooltip: "Drinks a Health Potion when below threshold." },
             { type: "slider", id: "combat-heal-threshold", label: "Heal at HP %",
               defaultValue: 30, min: 5, max: 90, step: 5 },
-          ],
-        },
-        {
-          id: "combat-chat", name: "Chat", collapsible: true, defaultOpen: false,
-          controls: [
-            { type: "toggle", id: "combat-chatspam", label: "Chat Spam", scriptId: "scr_chatspam",
-              tooltip: "Sends the message below every 1.5 s." },
-            { type: "input", id: "combat-spam-msg", label: "Message",
-              defaultValue: "W".repeat(60), placeholder: "spam text…" },
+            { type: "toggle", id: "combat-autorespawn", label: "Auto Respawn", scriptId: "scr_autorespawn",
+              tooltip: "Re-clicks the respawn button on death." },
           ],
         },
       ],
@@ -1299,47 +1295,54 @@ const DEFAULT_SCHEMA = {
               tooltip: "Traps adjacent players with walls — close to use." },
           ],
         },
+      ],
+    },
+    {
+      id: "base", name: "Base Saver", icon: null,
+      sections: [
         {
-          id: "build-basesaver", name: "Base Saver", collapsible: true, defaultOpen: true,
+          id: "bs-record-build", name: "Record & Build", collapsible: true, defaultOpen: true,
           controls: [
-            { type: "group", id: "bs-grp-record", label: "Record & Build", defaultOpen: true, controls: [
-              { type: "input",  id: "bs-name",   label: "Name", placeholder: "e.g. north corner" },
-              { type: "button", id: "bs-record", label: "Record current base", scriptId: "scr_basesaver",
-                tooltip: "Captures every building's offset from your GoldStash and saves it under the name above." },
-              { type: "select", id: "bs-list",   label: "Saved",
-                defaultValue: "", dynamicOptions: "axiom.baseSaver.data",
-                options: [{ value: "", label: "(no saved bases)" }] },
-              { type: "row", id: "bs-row-actions", controls: [
-                { type: "button", id: "bs-build",         label: "Build",          scriptId: "scr_basesaver" },
-                { type: "button", id: "bs-preview",       label: "Preview",        scriptId: "scr_basesaver",
-                  tooltip: "Ghost-overlay the layout under your cursor. L-click commits, R-click cancels." },
-                { type: "button", id: "bs-clear-overlay", label: "Clear",          scriptId: "scr_basesaver" },
-              ]},
-              { type: "row", id: "bs-row-manage", controls: [
-                { type: "button", id: "bs-pin",     label: "Pin",       scriptId: "scr_basesaver" },
-                { type: "button", id: "bs-delete",  label: "Delete",    scriptId: "scr_basesaver" },
-              ]},
+            { type: "input",  id: "bs-name",   label: "Name", placeholder: "e.g. north corner" },
+            { type: "button", id: "bs-record", label: "Record current base", scriptId: "scr_basesaver",
+              tooltip: "Captures every building's offset from your GoldStash and saves it under the name above." },
+            { type: "select", id: "bs-list",   label: "Saved",
+              defaultValue: "", dynamicOptions: "axiom.baseSaver.data",
+              options: [{ value: "", label: "(no saved bases)" }] },
+            { type: "row", id: "bs-row-actions", controls: [
+              { type: "button", id: "bs-build",         label: "Build",          scriptId: "scr_basesaver" },
+              { type: "button", id: "bs-preview",       label: "Preview",        scriptId: "scr_basesaver",
+                tooltip: "Ghost-overlay the layout under your cursor. L-click commits, R-click cancels." },
+              { type: "button", id: "bs-clear-overlay", label: "Clear",          scriptId: "scr_basesaver" },
             ]},
-            { type: "group", id: "bs-grp-pins", label: "Pins", defaultOpen: true, controls: [
-              { type: "row", id: "bs-pin-row", controls: [
-                { type: "button", id: "bs-pin1", label: "(empty)", scriptId: "scr_basesaver" },
-                { type: "button", id: "bs-pin2", label: "(empty)", scriptId: "scr_basesaver" },
-                { type: "button", id: "bs-pin3", label: "(empty)", scriptId: "scr_basesaver" },
-              ]},
-              { type: "button", id: "bs-unpin", label: "Remove last pin", scriptId: "scr_basesaver" },
+            { type: "row", id: "bs-row-manage", controls: [
+              { type: "button", id: "bs-pin",     label: "Pin",       scriptId: "scr_basesaver" },
+              { type: "button", id: "bs-delete",  label: "Delete",    scriptId: "scr_basesaver" },
             ]},
-            { type: "group", id: "bs-grp-backup", label: "Backup", defaultOpen: false, controls: [
-              { type: "row", id: "bs-backup-row", controls: [
-                { type: "button", id: "bs-export", label: "Export", scriptId: "scr_basesaver" },
-                { type: "button", id: "bs-import", label: "Import", scriptId: "scr_basesaver" },
-              ]},
+          ],
+        },
+        {
+          id: "bs-sec-pins", name: "Pins", collapsible: true, defaultOpen: true,
+          controls: [
+            { type: "row", id: "bs-pin-row", controls: [
+              { type: "button", id: "bs-pin1", label: "(empty)", scriptId: "scr_basesaver" },
+              { type: "button", id: "bs-pin2", label: "(empty)", scriptId: "scr_basesaver" },
+              { type: "button", id: "bs-pin3", label: "(empty)", scriptId: "scr_basesaver" },
             ]},
-            { type: "group", id: "bs-grp-prebuilt", label: "Prebuilt", defaultOpen: false, controls: [
-              { type: "text", id: "bs-prebuilt-info",
-                defaultValue: "One-click full base layouts placed relative to your GoldStash." },
-              { type: "button", id: "bs-plusbase", label: "Build Plus Base", scriptId: "scr_buildPlusBase",
-                tooltip: "Places the full Plus-shaped base (~500 buildings) around the GoldStash." },
+            { type: "button", id: "bs-unpin", label: "Remove last pin", scriptId: "scr_basesaver" },
+          ],
+        },
+        {
+          id: "bs-sec-backup", name: "Backup & Prebuilt", collapsible: true, defaultOpen: false,
+          controls: [
+            { type: "row", id: "bs-backup-row", controls: [
+              { type: "button", id: "bs-export", label: "Export", scriptId: "scr_basesaver" },
+              { type: "button", id: "bs-import", label: "Import", scriptId: "scr_basesaver" },
             ]},
+            { type: "text", id: "bs-prebuilt-info",
+              defaultValue: "One-click full base layouts placed relative to your GoldStash." },
+            { type: "button", id: "bs-plusbase", label: "Build Plus Base", scriptId: "scr_buildPlusBase",
+              tooltip: "Places the full Plus-shaped base (~500 buildings) around the GoldStash." },
           ],
         },
       ],
@@ -1441,9 +1444,19 @@ const DEFAULT_SCHEMA = {
       id: "party", name: "Party", icon: null,
       sections: [
         {
-          id: "party-admin", name: "Admin", collapsible: true, defaultOpen: true,
+          id: "party-admin", name: "Permissions", collapsible: true, defaultOpen: true,
           controls: [
-            { type: "button", id: "party-givesell", label: "Grant sell perms to all", scriptId: "scr_autoGiveSell" },
+            { type: "button", id: "party-givesell", label: "Grant sell perms to all", scriptId: "scr_autoGiveSell",
+              tooltip: "Gives every party member permission to sell — staggered so they all get it." },
+          ],
+        },
+        {
+          id: "party-chat", name: "Chat", collapsible: true, defaultOpen: false,
+          controls: [
+            { type: "toggle", id: "combat-chatspam", label: "Chat Spam", scriptId: "scr_chatspam",
+              tooltip: "Sends the message below every ~1 s (random pool if blank)." },
+            { type: "input", id: "combat-spam-msg", label: "Message",
+              defaultValue: "", placeholder: "leave blank for random pool" },
           ],
         },
       ],

@@ -95,21 +95,29 @@
       gap: 16px;
     }
     .ax-feature {
-      background: var(--bg-panel);
-      border: 1px solid var(--border);
-      border-radius: 10px;
+      background: var(--glass-bg);
+      border: 1px solid var(--glass-border);
+      border-radius: 16px;
       padding: 22px 22px 24px;
-      transition: border-color .15s, transform .15s;
+      backdrop-filter: var(--glass-blur-lite);
+      -webkit-backdrop-filter: var(--glass-blur-lite);
+      box-shadow: var(--glass-shell-sm);
+      transition: border-color .15s, transform .15s, box-shadow .15s;
     }
-    .ax-feature:hover { border-color: var(--border-h); transform: translateY(-2px); }
+    .ax-feature:hover {
+      border-color: var(--glass-border-h);
+      transform: translateY(-2px);
+      box-shadow: var(--glass-shell);
+    }
     .ax-feature-icon {
-      width: 32px; height: 32px;
+      width: 34px; height: 34px;
       display: flex; align-items: center; justify-content: center;
-      background: rgba(255,255,255,0.04);
-      border: 1px solid var(--border);
-      border-radius: 8px;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid var(--glass-border);
+      border-radius: 10px;
       color: var(--text); font: 14px var(--font-mono);
       margin-bottom: 14px;
+      box-shadow: 0 1px 0 rgba(255,255,255,0.08) inset;
     }
     .ax-feature h3 { font: 500 15px var(--font); color: var(--text); margin: 0 0 8px; }
     .ax-feature p { font: 13px/1.55 var(--font); color: var(--text-mute); margin: 0; }
@@ -118,10 +126,13 @@
     .ax-engines { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; max-width: 980px; margin: 0 auto; }
     @media (max-width: 720px) { .ax-engines { grid-template-columns: 1fr; } .ax-hero h1 { font-size: 38px; } }
     .ax-engine {
-      background: var(--bg-panel);
-      border: 1px solid var(--border);
-      border-radius: 10px;
+      background: var(--glass-bg);
+      border: 1px solid var(--glass-border);
+      border-radius: 16px;
       padding: 26px 24px;
+      backdrop-filter: var(--glass-blur-lite);
+      -webkit-backdrop-filter: var(--glass-blur-lite);
+      box-shadow: var(--glass-shell-sm);
     }
     .ax-engine-tag {
       display: inline-block; padding: 3px 10px;

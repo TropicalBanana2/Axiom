@@ -30,9 +30,10 @@
   --radius-sm:   4px;
   --shadow:      0 6px 20px rgba(0,0,0,0.4);
 
-  /* Liquid-glass tokens — used by the in-game panel only. The landing
-     page sits over a solid background where glass has no surface to
-     refract, so it keeps the flat dark look. */
+  /* Liquid-glass tokens — shared by the in-game panel, the dashboard,
+     and the landing page. Every surface sits over the ambient gradient
+     backdrop (below), so the translucent panels have something to
+     refract for the dark liquid-glass look. */
   --glass-bg:        rgba(22, 24, 30, 0.55);
   --glass-bg-elev:   rgba(40, 44, 54, 0.55);
   --glass-bg-deep:   rgba(10, 12, 16, 0.65);
@@ -301,11 +302,13 @@ input[type="password"].ax-input, select.ax-input, textarea.ax-input {
 
 /* ──────── cards (glass) ──────── */
 .ax-card {
-  background: rgba(255,255,255,0.04);
+  background: var(--glass-bg);
   border: 1px solid var(--glass-border);
   border-radius: 14px;
   padding: 18px 20px; margin-bottom: 14px;
-  box-shadow: 0 1px 0 rgba(255,255,255,0.06) inset;
+  backdrop-filter: var(--glass-blur-lite);
+  -webkit-backdrop-filter: var(--glass-blur-lite);
+  box-shadow: var(--glass-shell-sm);
 }
 .ax-card-title { font: 500 12px var(--font-mono); color: var(--text-mute); margin-bottom: 10px; letter-spacing: 0.3px; }
 .ax-card-title::before { content: "# "; color: var(--text-dim); }
