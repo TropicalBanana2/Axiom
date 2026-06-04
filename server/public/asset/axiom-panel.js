@@ -505,6 +505,37 @@
     host.appendChild(canvas);
     document.body.appendChild(host);
     const labels = new Map();   // session id -> label div
+    const smooth = new Map();   // session id -> { x, y } eased world position
+
+    // The bot's smooth WORLD position. For bots loaded in this view we
+    // replicate the game's own tick interpolation (lerp fromTick→targetTick
+    // by msInThisTick/50) so it moves exactly as smoothly as the sprite.
+    // For off-view bots we only have the 400ms fleet snapshot, so we ease
+    // toward it. Either way the result is stored per-bot and eased a touch
+    // to kill any residual stepping.
+    function worldPos(game, b) {
+      let target = b.pos;
+      const ents = game.world && game.world.entities;
+      if (b.uid != null && ents) {
+        const e = ents.get(b.uid);
+        const to = e && e.targetTick && e.targetTick.position;
+        if (to) {
+          const from = e.fromTick && e.fromTick.position;
+          const repl = game.world.replicator;
+          const tp = repl ? Math.min(1, Math.max(0, (repl.msInThisTick || 0) / 50)) : 1;
+          target = from ? { x: from.x + (to.x - from.x) * tp, y: from.y + (to.y - from.y) * tp } : to;
+        }
+      }
+      if (!target) return null;
+      let disp = smooth.get(b.id);
+      if (!disp) { disp = { x: target.x, y: target.y }; smooth.set(b.id, disp); }
+      // Snap if teleported far (respawn / first sight), else ease.
+      const far = Math.hypot(target.x - disp.x, target.y - disp.y) > 400;
+      const a = far ? 1 : 0.5;
+      disp.x += (target.x - disp.x) * a;
+      disp.y += (target.y - disp.y) * a;
+      return disp;
+    }
 
     function frame() {
       try {
@@ -522,13 +553,8 @@
           ctx.clearRect(0, 0, W, Hh);
           const seen = new Set();
           for (const b of fleet) {
-            // World position: prefer the live entity (smooth), fall back
-            // to the fleet snapshot for bots not loaded in this view.
-            let wp = b.pos;
-            if (b.uid != null && game.world.entities) {
-              const e = game.world.entities.get(b.uid);
-              if (e && e.targetTick && e.targetTick.position) wp = e.targetTick.position;
-            }
+            // Smooth, tick-interpolated world position (see worldPos).
+            const wp = worldPos(game, b);
             if (!wp) continue;
             const sp = renderer.worldToScreen(wp.x, wp.y);
             if (!sp) continue;
@@ -558,15 +584,17 @@
               labels.set(b.id, lab);
             }
             lab.textContent = b.label || ("#" + b.id);
-            lab.style.left = (sp.x | 0) + "px";
-            lab.style.top = ((sp.y | 0) - 38) + "px";
+            lab.style.left = sp.x.toFixed(1) + "px";
+            lab.style.top = (sp.y - 54).toFixed(1) + "px";
             lab.style.borderColor = b.dead ? "rgba(248,113,113,0.7)"
               : b.navStatus === "farming" ? "rgba(74,222,128,0.7)"
               : (b.navStatus === "returning" || b.navStatus === "to-farm") ? "rgba(125,211,252,0.7)"
               : "rgba(255,255,255,0.18)";
             lab.style.display = "";
           }
-          for (const [id, lab] of labels) if (!seen.has(id)) lab.style.display = "none";
+          for (const [id, lab] of labels) {
+            if (!seen.has(id)) { lab.style.display = "none"; smooth.delete(id); }
+          }
         }
       } catch {}
       requestAnimationFrame(frame);
