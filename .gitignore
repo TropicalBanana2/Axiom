@@ -4,7 +4,6 @@ node_modules/
 
 # ── Build output ───────────────────────────────────────────────
 dist/
-editor/dist/
 *.tsbuildinfo
 
 # ── Runtime data & secrets (NEVER commit) ──────────────────────
@@ -19,8 +18,7 @@ server/data/*.db-wal
 logs/
 .pm2/
 
-# ── Editor / local dev ─────────────────────────────────────────
-editor/.axiom-dev.json
+# ── Local dev ──────────────────────────────────────────────────
 .vscode/
 .idea/
 

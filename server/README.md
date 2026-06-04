@@ -4,7 +4,7 @@ Self-hosted Banshee successor for zombs.io. Three engines, one
 localhost install:
 
 - **UI engine** — search-first, minimalist panel rendered from a JSON
-  schema. Editable by hand or via the upstream uiengine (`/editor`).
+  schema (seeded from `src/defaultSchema.js`, then editable in the DB).
 - **Scripting engine** — `ctx`-shaped JS runs per-control; live game
   state via `ctx.game`, persisted state via `ctx.storage`.
 - **Session engine** — headless bot workers that stay logged in to
@@ -97,8 +97,9 @@ removed.
 
 The in-game panel (toggle with `` ` ``) reads its schema from
 `GET /api/schema`. The schema describes tabs → sections → controls,
-each control optionally bound to a script. The same schema format is
-what the upstream `D:/axiom/editor/` produces.
+each control optionally bound to a script. The default tree is seeded
+from `src/defaultSchema.js` on first boot and lives in the DB after that
+(auto-reseeds when the bundled `schemaVersion` bumps).
 
 **Search is global** — the search box at the top of the panel filters
 controls across the *current* tab in real time. Type `heal` and only
@@ -183,16 +184,12 @@ When extending: the pattern in `defaultSchema.js` is a `ctx`-flavoured
 script per control. `ctx.game.game.network.sendRpc` maps 1-to-1 onto the
 zombs.io RPCs; per-script state goes through `ctx.storage`.
 
-## Wire it up with the editor
+## Editing the schema
 
-The standalone `D:/axiom/editor/` (Vite + React + Monaco) produces the
-same schema format. To edit the live schema:
-
-1. `cd D:/axiom/editor && npm run dev`
-2. In uiengine, **Load** `data/axiom.db` (or paste in the JSON from
-   `GET /api/schema`).
-3. Edit visually; export and `PUT /api/schema` (the editor's "Export"
-   flow can be pointed at `http://localhost/api/schema` directly).
+The default panel tree lives in `src/defaultSchema.js`. To change the
+panel, edit that file and bump its `schemaVersion` — the server reseeds
+the DB copy on next boot. The live schema is also readable at
+`GET /api/schema` and writable (with auth) at `PUT /api/schema`.
 
 ## Notes / known gotchas
 
