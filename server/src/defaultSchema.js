@@ -975,7 +975,7 @@ function computeSpots(tree, stone, n) {
   const ax = stone.x - tree.x, ay = stone.y - tree.y;
   const D = Math.hypot(ax, ay) || 1;             // tree↔stone gap
   const px = -ay / D, py = ax / D;               // unit perpendicular
-  const REACH = 150;                             // ~harvest reach
+  const REACH = 120;                             // ~harvest reach (kept tight so bots stay close to both)
   const maxO = Math.sqrt(Math.max(400, REACH * REACH - (D / 2) * (D / 2)));
   let spacing = (n > 1) ? Math.min(68, (2 * maxO) / (n - 1)) : 0;
   spacing = Math.max(spacing, 60);               // > player diameter so bodies don't shove
@@ -1009,9 +1009,11 @@ function apply(tree, stone) {
     const ids = sess.map((s) => s.id).sort((a, b) => a - b);
     if (!ids.length) { ctx.toast('Smart Farm: no sessions on this server'); try { ws.close(); } catch {} return; }
     const spots = computeSpots(tree, stone, ids.length);
+    const targets = [{ x: Math.round(tree.x), y: Math.round(tree.y) },
+                     { x: Math.round(stone.x), y: Math.round(stone.y) }];
     ids.forEach((id, idx) => {
       const s = spots[idx];
-      ws.send(JSON.stringify({ op: 'setFarmSpot', sid: id, args: { x: s.x, y: s.y, angle: s.angle, fixed: true } }));
+      ws.send(JSON.stringify({ op: 'setFarmSpot', sid: id, args: { x: s.x, y: s.y, angle: s.angle, fixed: true, targets: targets } }));
       ws.send(JSON.stringify({ op: 'setNav', sid: id, args: { on: true, returnToBase: true } }));
     });
     ctx.toast('Smart Farm: ' + ids.length + ' bot(s) assigned to tree + stone');
@@ -1351,7 +1353,7 @@ else if (controlId === 'bs-unpin') {
 };
 
 const DEFAULT_SCHEMA = {
-  schemaVersion: 19,
+  schemaVersion: 20,
   meta: {
     name: "Axiom",
     version: "0.1.0",

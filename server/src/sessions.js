@@ -456,16 +456,20 @@ function handleJsonFrame(ws, raw, authTimer) {
       if (a.clear) {
         bot.setFarmSpot(null);
         bot.farmFixed = false;
+        if (bot.setFarmTargets) bot.setFarmTargets(null);
       } else if (a.useCurrent && bot.myPlayer && bot.myPlayer.position) {
         // Capture the bot's current position + its current aim as the spot.
         const ang = bot.myPlayer.aimingYaw != null ? bot.myPlayer.aimingYaw : (bot.myPlayer.yaw || 0);
         bot.setFarmSpot(bot.myPlayer.position.x, bot.myPlayer.position.y, ang);
         bot.farmFixed = false;
+        if (bot.setFarmTargets) bot.setFarmTargets(null);
       } else if (a.x != null && a.y != null) {
         bot.setFarmSpot(a.x, a.y, a.angle || 0);
         // Smart Farm sends fixed:true — a predetermined per-bot spot the
         // ring shouldn't offset. A plain manual set clears the flag.
         bot.farmFixed = !!a.fixed;
+        // Optional resource targets to alternate the swing between.
+        if (bot.setFarmTargets) bot.setFarmTargets(a.targets || null);
       }
       send(ws, { op: "farmSpot", sid: bot.id, data: bot.farmSpot });
       break;

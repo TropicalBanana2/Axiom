@@ -153,9 +153,21 @@ class Bot extends EventEmitter {
   // Mark / clear the farm spot. angle is 0-359 (the aim direction used
   // once the bot arrives). Persisted by the caller (dashboard/db).
   setFarmSpot(x, y, angle) {
-    if (x == null) { this.farmSpot = null; return; }
+    if (x == null) { this.farmSpot = null; this.farmTargets = null; return; }
     this.farmSpot = { x: +x, y: +y, angle: ((+angle % 360) + 360) % 360 };
     this.navPath = null; this.navIndex = 0; this.navArrived = false;
+  }
+
+  // Optional resource targets for the farm spot. When set (Smart Farm sends
+  // the tree + stone), the bot ALTERNATES its swing between them while
+  // farming — aiming straight at a real resource each time — instead of
+  // holding one fixed angle at the empty point between them. This is what
+  // lets a single bot collect both wood and stone, and makes the exact
+  // standing position far less fiddly.
+  setFarmTargets(targets) {
+    this.farmTargets = (Array.isArray(targets) && targets.length)
+      ? targets.map((t) => ({ x: +t.x, y: +t.y })).filter((t) => Number.isFinite(t.x) && Number.isFinite(t.y))
+      : null;
   }
 
   // The base anchor the bot returns to, in priority order:
@@ -974,7 +986,18 @@ class Bot extends EventEmitter {
           this.sendRpc("EquipItem", { itemName: "PetCARL", tier: 1 });
         }
         this.navStatus = "farming";
-        this.attackAngle(farm.angle);
+        // If we have explicit resource targets (Smart Farm: tree + stone),
+        // alternate the swing between them so the bot actually hits a real
+        // resource each time and collects BOTH — rather than swinging at the
+        // empty midpoint. Otherwise hold the single configured angle.
+        if (this.farmTargets && this.farmTargets.length > 1) {
+          const period = 14;   // ~0.7 s on each resource before switching
+          const idx = Math.floor(this.tick / period) % this.farmTargets.length;
+          const t = this.farmTargets[idx];
+          this.attackToward(t.x, t.y);
+        } else {
+          this.attackAngle(farm.angle);
+        }
         this.navPath = null;
       } else {
         this.navArrived = false;
