@@ -126,6 +126,10 @@ class Bot extends EventEmitter {
     this.farmSpot = null;
     this.navIntent = "idle";
     this.navHome = null;
+    // navBase: {x,y} — the explicit base anchor the user sets by
+    // positioning the bot where they want it and starting smart upgrade.
+    // Takes priority over the GoldStash / spawn fallback in _homePoint().
+    this.navBase = null;
     this.navReturning = false;
     this.navPath = null;             // [{x,y}, ...] remaining waypoints
     this.navIndex = 0;
@@ -147,18 +151,35 @@ class Bot extends EventEmitter {
     this.navPath = null; this.navIndex = 0; this.navArrived = false;
   }
 
-  // The base anchor the bot returns to = the party's GoldStash. That is
-  // the one true, shared base — every bot in the party returns to the
-  // same place. We deliberately do NOT use each bot's raw spawn point:
-  // alts joining a party spawn scattered across the map, so anchoring to
-  // spawn made them "go to random places" on the way back. The captured
-  // spawn position (navHome) is only a fallback until the stash is known.
+  // The base anchor the bot returns to, in priority order:
+  //   1. navBase  — the exact spot the user placed the bot at when they
+  //                 started smart upgrade (captureBase below). This is the
+  //                 preferred anchor: the user picks where in the base the
+  //                 bots should sit.
+  //   2. GoldStash — the shared party base, if no explicit point was set.
+  //   3. navHome  — the captured spawn position, last-resort fallback.
+  // We never anchor to the raw spawn first: alts join scattered across
+  // the map, which made them "go to random places" on the way back.
   _homePoint() {
+    const b = this.navBase;
+    if (b && Number.isFinite(b.x) && Number.isFinite(b.y)) return { x: b.x, y: b.y };
     const gs = this.gs;
     if (gs && Number.isFinite(gs.x) && Number.isFinite(gs.y)) {
       return { x: gs.x, y: gs.y };
     }
     return this.navHome || null;
+  }
+
+  // Capture the bot's CURRENT position as its base anchor. Called when the
+  // user starts smart upgrade, so the bots return to wherever the user has
+  // positioned them inside the base. Returns the captured point or null.
+  captureBase() {
+    const p = this.myPlayer && this.myPlayer.position;
+    if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return null;
+    this.navBase = { x: p.x, y: p.y };
+    // Re-path any in-progress return so it heads to the new anchor.
+    this.navPath = null; this.navIndex = 0;
+    return this.navBase;
   }
 
   // Controller intent. on=true → go farm (capturing the current base

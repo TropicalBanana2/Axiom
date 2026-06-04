@@ -181,6 +181,15 @@ function createCoordinator({ getBots, sendToUser }) {
     partyId = +partyId;
     if (enabled) {
       c.parties.add(partyId);
+      // Snapshot each bot's CURRENT position as its base anchor — the user
+      // has positioned them where they want them to sit/return to, so that
+      // spot (not the GoldStash or spawn) becomes "home".
+      for (const bot of getBots()) {
+        if (bot._userId === userId && bot.captureBase &&
+            bot.myPlayer && bot.myPlayer.partyId === partyId) {
+          bot.captureBase();
+        }
+      }
     } else {
       c.parties.delete(partyId);
       // Release any bots in THIS party that the coordinator sent to farm.
