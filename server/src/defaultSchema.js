@@ -946,9 +946,12 @@ grantNext();`),
 const rend = game && game.world && game.world.renderer;
 if (!rend || !rend.screenToWorld) { ctx.toast('Smart Farm: load the world first'); return; }
 const SF = (window.__axiomSmartFarm = window.__axiomSmartFarm || {});
-if (SF.cleanup) { SF.cleanup(); SF.cleanup = null; }   // re-arm cleanly
-SF.picks = [];
+// Toggle: pressing the button again while armed CANCELS (so you're never
+// stuck with clicks captured).
+if (SF.armed && SF.cancel) { SF.cancel(); ctx.toast('Smart Farm: cancelled'); return; }
 
+// Only pick a resource the click actually landed on — a tight radius so a
+// stray click in a dense base can't grab a tree/stone across the map.
 const nearest = (wx, wy, model) => {
   let best = null, bestD = Infinity;
   for (const e of game.world.entities.values()) {
@@ -957,7 +960,7 @@ const nearest = (wx, wy, model) => {
     const d = Math.hypot(t.position.x - wx, t.position.y - wy);
     if (d < bestD) { bestD = d; best = t.position; }
   }
-  return (best && bestD < 700) ? { x: best.x, y: best.y } : null;
+  return (best && bestD < 110) ? { x: best.x, y: best.y } : null;
 };
 
 // Predetermined, distinct standing spots so EVERY bot can reach BOTH the
@@ -1010,26 +1013,51 @@ function apply(tree, stone) {
   ws.onerror = () => ctx.toast('Smart Farm: sessions WS error');
 }
 
+// On-screen banner so it's obvious pick mode is armed + how to cancel.
+const banner = document.createElement('div');
+banner.style.cssText = 'position:fixed;top:48px;left:50%;transform:translateX(-50%);z-index:99999;' +
+  'padding:7px 14px;border-radius:10px;font:600 12px ui-sans-serif,system-ui,sans-serif;color:#fff;' +
+  'background:rgba(20,22,28,0.72);border:1px solid rgba(125,211,252,0.5);' +
+  'backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);box-shadow:0 6px 18px rgba(0,0,0,0.45)';
+const setBanner = (t) => { banner.textContent = t; };
+document.body.appendChild(banner);
+
 const onDown = (e) => {
-  if (e.target && e.target.closest && e.target.closest('.ax-panel')) return;  // ignore panel clicks
+  if (e.target && e.target.closest && e.target.closest('.ax-panel')) return;  // let panel clicks through
+  if (e.button !== 0) {   // right/middle click cancels
+    SF.cancel(); ctx.toast('Smart Farm: cancelled'); return;
+  }
   e.preventDefault(); e.stopPropagation();
   const w = rend.screenToWorld(e.clientX, e.clientY);
   if (!w) return;
   if (SF.picks.length === 0) {
     const tree = nearest(w.x, w.y, 'Tree');
-    if (!tree) { ctx.toast('No tree near that click — try again'); return; }
-    SF.picks.push(tree); ctx.toast('Tree set ✓ — now click the STONE');
+    if (!tree) { ctx.toast('Click directly on a TREE (Esc to cancel)'); return; }
+    SF.picks.push(tree); setBanner('Tree ✓ — now click the STONE   ·   Esc to cancel');
   } else {
     const stone = nearest(w.x, w.y, 'Stone');
-    if (!stone) { ctx.toast('No stone near that click — try again'); return; }
+    if (!stone) { ctx.toast('Click directly on a STONE (Esc to cancel)'); return; }
     SF.picks.push(stone);
-    if (SF.cleanup) { SF.cleanup(); SF.cleanup = null; }
-    apply(SF.picks[0], SF.picks[1]);
+    const a = SF.picks[0], b = SF.picks[1];
+    SF.cancel();
+    apply(a, b);
   }
 };
+const onKey = (e) => { if (e.key === 'Escape') { SF.cancel(); ctx.toast('Smart Farm: cancelled'); } };
+
+SF.armed = true;
+SF.picks = [];
 window.addEventListener('mousedown', onDown, true);
-SF.cleanup = () => window.removeEventListener('mousedown', onDown, true);
-if (ctx.toast) ctx.toast('Smart Farm: click the TREE (then the stone)…');`),
+window.addEventListener('keydown', onKey, true);
+const tmo = setTimeout(() => { if (SF.armed) { SF.cancel(); ctx.toast('Smart Farm: timed out'); } }, 25000);
+SF.cancel = () => {
+  SF.armed = false; SF.picks = [];
+  clearTimeout(tmo);
+  window.removeEventListener('mousedown', onDown, true);
+  window.removeEventListener('keydown', onKey, true);
+  try { banner.remove(); } catch {}
+};
+setBanner('Smart Farm: click the TREE   ·   Esc / right-click to cancel');`),
 
   // ── Base Saver ──
   // One script dispatches every BaseSaver action via controlId so all
@@ -1316,7 +1344,7 @@ else if (controlId === 'bs-unpin') {
 };
 
 const DEFAULT_SCHEMA = {
-  schemaVersion: 16,
+  schemaVersion: 17,
   meta: {
     name: "Axiom",
     version: "0.1.0",
