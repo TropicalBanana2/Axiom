@@ -50,6 +50,14 @@ function upgradeCost(type, tier) {
   return { gold: b.gold[i] || 0, wood: b.wood[i] || 0, stone: b.stone[i] || 0, token: b.token[i] || 0 };
 }
 
+// Cost to PLACE a fresh tier-1 building of `type` (index 0 of the cost
+// arrays). Used by auto-rebuild. null for unknown types.
+function placeCost(type) {
+  const b = BUILDINGS[type];
+  if (!b) return null;
+  return { gold: b.gold[0] || 0, wood: b.wood[0] || 0, stone: b.stone[0] || 0, token: b.token[0] || 0 };
+}
+
 // Is a building of `type` walkable by this bot?
 //   ownedSet: optional Set of building uids this bot/party owns (for doors)
 function isWalkable(type, owned) {
@@ -80,4 +88,4 @@ function itemUpgradeCost(itemName, tier) {
   return it.gold[tier] || 0;
 }
 
-module.exports = { BUILDINGS, MAX_TIER, ITEMS, upgradeCost, itemUpgradeCost, isWalkable };
+module.exports = { BUILDINGS, MAX_TIER, ITEMS, upgradeCost, placeCost, itemUpgradeCost, isWalkable };

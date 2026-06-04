@@ -18,7 +18,7 @@
 // Costs come from the static buildingData table (captured once; zombs.io
 // balance is stable). No runtime schema dependency.
 
-const { upgradeCost, itemUpgradeCost, MAX_TIER } = require("./buildingData");
+const { upgradeCost, placeCost, itemUpgradeCost, MAX_TIER } = require("./buildingData");
 
 const ECONOMY_TYPES = new Set(["GoldStash", "GoldMine"]);
 // Defensive structures + the harvester (resource producer). These are
@@ -150,6 +150,11 @@ function createCoordinator({ getBots, sendToUser }) {
   // bot.id -> last time we dispatched it to an out-of-range building, so
   // we don't re-issue gotoPoint every tick while it walks over.
   const lastMoveAt = new Map();
+  // Auto-rebuild memory: partyId -> Map(key -> { type, x, y, firstSeen,
+  // established }). "key" is type+tile so a rebuilt building (new uid) still
+  // matches its slot. lastRebuildAt throttles re-placement per slot.
+  const baseMemory = new Map();
+  const lastRebuildAt = new Map();
 
   // Buy the next pickaxe tier ONLY when the harvest-gain math says it's
   // worth it (see pickaxeWorthIt). Buys one step at a time toward the
@@ -168,7 +173,12 @@ function createCoordinator({ getBots, sendToUser }) {
   }
 
   function freshConfig() {
-    return { aheadBy: 2, farmWhenSaving: true, parties: new Set() };
+    return {
+      aheadBy: 2, farmWhenSaving: true,
+      autoRebuild: true,        // replace dead base buildings while running
+      whenDone: "keep",         // when fully maxed: keep | stop | base
+      parties: new Set(),
+    };
   }
   function getRaw(userId) {
     let c = configs.get(userId);
@@ -181,6 +191,10 @@ function createCoordinator({ getBots, sendToUser }) {
     const c = getRaw(userId);
     if (partial.aheadBy !== undefined) c.aheadBy = Math.max(0, Math.min(7, partial.aheadBy | 0));
     if (partial.farmWhenSaving !== undefined) c.farmWhenSaving = !!partial.farmWhenSaving;
+    if (partial.autoRebuild !== undefined) c.autoRebuild = !!partial.autoRebuild;
+    if (partial.whenDone !== undefined && ["keep", "stop", "base"].includes(partial.whenDone)) {
+      c.whenDone = partial.whenDone;
+    }
     return getConfig(userId);
   }
 
@@ -216,7 +230,12 @@ function createCoordinator({ getBots, sendToUser }) {
   // Serialisable config view for the dashboard.
   function getConfig(userId) {
     const c = configs.get(userId) || freshConfig();
-    return { aheadBy: c.aheadBy, farmWhenSaving: c.farmWhenSaving, parties: [...c.parties] };
+    return {
+      aheadBy: c.aheadBy, farmWhenSaving: c.farmWhenSaving,
+      autoRebuild: c.autoRebuild !== false,
+      whenDone: c.whenDone || "keep",
+      parties: [...c.parties],
+    };
   }
   function getStatus(userId) {
     return statuses.get(userId) || null;
@@ -334,6 +353,57 @@ function createCoordinator({ getBots, sendToUser }) {
     return null;
   }
 
+  // Auto-rebuild: remember the established base layout per party and, when
+  // a building vanishes (destroyed), place a fresh tier-1 in its slot from
+  // an affordable in-range bot (or walk the nearest one over). Smart upgrade
+  // then re-upgrades it. GoldStash is skipped (can't be member-rebuilt).
+  function rebuildPass(partyId, group, buildings, now, actions) {
+    let mem = baseMemory.get(partyId);
+    if (!mem) { mem = new Map(); baseMemory.set(partyId, mem); }
+    const EST_MS = 8000;     // must be alive this long before we'll rebuild it
+    const REBUILD_CD = 4000; // per-slot throttle
+    const TILE = 24;
+    const keyOf = (t, x, y) => t + "|" + Math.round(x / TILE) + "|" + Math.round(y / TILE);
+
+    const liveKeys = new Set();
+    for (const b of buildings) {
+      if (b.x == null || b.y == null || b.type === "GoldStash") continue;
+      const key = keyOf(b.type, b.x, b.y);
+      liveKeys.add(key);
+      let rec = mem.get(key);
+      if (!rec) { rec = { type: b.type, x: b.x, y: b.y, firstSeen: now, established: false }; mem.set(key, rec); }
+      rec.x = b.x; rec.y = b.y;
+      if (!rec.established && now - rec.firstSeen >= EST_MS) rec.established = true;
+    }
+
+    for (const [key, rec] of mem) {
+      if (liveKeys.has(key)) continue;
+      if (!rec.established) { mem.delete(key); continue; }   // never stabilised → forget it
+      if (now - (lastRebuildAt.get(key) || 0) < REBUILD_CD) continue;
+      const cost = placeCost(rec.type);
+      if (!cost) { mem.delete(key); continue; }
+      let placer = null, mover = null, moverD = Infinity;
+      for (const bot of group) {
+        const p = bot.myPlayer; if (!p) continue;
+        const mats = { gold: p.gold || 0, wood: p.wood || 0, stone: p.stone || 0, token: p.token || 0 };
+        if (!canAfford(mats, cost)) continue;
+        const pos = p.position;
+        const d = pos ? Math.hypot(pos.x - rec.x, pos.y - rec.y) : Infinity;
+        if (d <= UPGRADE_RANGE && !placer) placer = bot;
+        if (d < moverD) { moverD = d; mover = bot; }
+      }
+      if (placer) {
+        try { placer.sendRpc("MakeBuilding", { type: rec.type, x: rec.x, y: rec.y, yaw: 0 }); } catch {}
+        lastRebuildAt.set(key, now);
+        if (actions) actions.push({ uid: -1, type: rec.type, rebuild: true, by: placer.id });
+      } else if (mover && mover.gotoPoint && now - (lastMoveAt.get(mover.id) || 0) > UPGRADE_MOVE_COOLDOWN_MS) {
+        mover.gotoPoint(rec.x, rec.y);
+        mover._upgradeMoveUntil = now + 8000;
+        lastMoveAt.set(mover.id, now);
+      }
+    }
+  }
+
   function runForUser(userId, cfg) {
     const groups = groupBots(userId);
     const now = Date.now();
@@ -428,6 +498,18 @@ function createCoordinator({ getBots, sendToUser }) {
         });
       }
 
+      // ── Auto-rebuild: replace dead base buildings while running ──
+      if (cfg.autoRebuild !== false) {
+        rebuildPass(partyId, group, buildings, now, actions);
+      }
+
+      // "Done" = every (non-stash) building is maxed and there's nothing
+      // left to upgrade. Drives the when-done behaviour below.
+      const allMaxed = buildings.length > 0 &&
+        buildings.every((b) => b.type === "GoldStash" || b.tier >= MAX_TIER);
+      const whenDone = cfg.whenDone || "keep";
+      const resting = allMaxed && whenDone !== "keep";
+
       // ── Retreat-to-farm integration ──
       // "While saving up gold, retreat to the farm location" and
       // "if a bot is low on materials, go back to farming".
@@ -446,7 +528,19 @@ function createCoordinator({ getBots, sendToUser }) {
       //   return only once BOTH are above FARM_CEIL (a full stockpile)
       // The wide floor→ceil band means one long farm trip, not a loop.
       // Thresholds SCALE with the base level (see farmThresholds).
-      if (cfg.farmWhenSaving !== false) {
+      if (resting) {
+        // Base fully maxed and the user chose an end behaviour:
+        //   stop → stop farming, idle in place
+        //   base → walk every bot back to the base and settle
+        for (const bot of group) {
+          if (bot._upgradeMoveUntil && now < bot._upgradeMoveUntil) continue;
+          if (whenDone === "base") bot.returnToBase = true;
+          if (bot._coordFarming || bot.navActive) {
+            bot._coordFarming = false;
+            bot.setNavActive(false);
+          }
+        }
+      } else if (cfg.farmWhenSaving !== false) {
         const { ecoMin, restMax } = tierStats(buildings);
         const { floor: FARM_FLOOR, ceil: FARM_CEIL } = farmThresholds(ecoMin, restMax);
 

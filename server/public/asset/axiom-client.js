@@ -34,7 +34,7 @@
     selectedParty: null,                             // { serverId, partyId } | null
     flags: [],
     keys: [],
-    smartUpgrade: { aheadBy: 2, farmWhenSaving: true, parties: [] },  // config
+    smartUpgrade: { aheadBy: 2, farmWhenSaving: true, autoRebuild: true, whenDone: "keep", parties: [] },  // config
     smartUpgradeStatus: null,                        // live status from server
     pendingPartyCreate: null,                        // two-phase party spawn state
     fleet: [],                                       // live bot positions/nav
@@ -886,6 +886,19 @@
       farmToggle.classList.toggle("on", nv);
       send({ op: "smartUpgradeTuning", args: { farmWhenSaving: nv } });
     };
+    const rebuildToggle = el("button", { class: `ax-toggle ${cfg.autoRebuild !== false ? "on" : ""}` });
+    rebuildToggle.onclick = () => {
+      const nv = !rebuildToggle.classList.contains("on");
+      rebuildToggle.classList.toggle("on", nv);
+      send({ op: "smartUpgradeTuning", args: { autoRebuild: nv } });
+    };
+    const doneSelect = el("select", { class: "ax-input", style: "flex:1;max-width:170px" });
+    for (const [v, lbl] of [["keep", "Keep farming"], ["stop", "Stop farming"], ["base", "Return to base"]]) {
+      const opt = el("option", { value: v }, lbl);
+      if ((cfg.whenDone || "keep") === v) opt.selected = true;
+      doneSelect.appendChild(opt);
+    }
+    doneSelect.onchange = () => send({ op: "smartUpgradeTuning", args: { whenDone: doneSelect.value } });
 
     main.appendChild(el("div", { class: "ax-card" },
       el("div", { class: "ax-card-title" }, "smart upgrade"),
@@ -898,6 +911,11 @@
         aheadSlider, aheadVal),
       el("div", { class: "ax-ctrl-row", style: "padding:8px 0;border:none" },
         el("span", { class: "ax-ctrl-label" }, "Farm-retreat while saving"), farmToggle),
+      el("div", { class: "ax-ctrl-row", style: "padding:8px 0;border:none" },
+        el("span", { class: "ax-ctrl-label" }, "Auto-rebuild dead buildings"), rebuildToggle),
+      el("div", { style: "display:flex;align-items:center;gap:8px;padding:6px 0" },
+        el("span", { style: "font-size:11px;color:var(--text-mute);min-width:120px" }, "When fully upgraded"),
+        doneSelect),
       el("div", { id: "party-su-status", style: "margin-top:10px;padding-top:10px;border-top:1px solid var(--glass-divider,var(--border))" })
     ));
     updatePartyStatus();
