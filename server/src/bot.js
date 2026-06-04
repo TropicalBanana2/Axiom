@@ -953,7 +953,19 @@ class Bot extends EventEmitter {
     // ── Already at the desired location → act ──
     if (distDesired <= ARRIVE) {
       if (desiredIsFarm) {
+        // Precise settle: ARRIVE (60) is loose, so fine-position right onto
+        // the exact spot before farming — and if collision (another bot /
+        // a resource) knocks the bot off mid-farm, walk back. Hysteresis:
+        // settle within FARM_TOL, only re-correct once pushed past FARM_DRIFT.
+        const FARM_TOL = 18, FARM_DRIFT = 34;
+        if (this.navArrived && distDesired > FARM_DRIFT) this.navArrived = false;
         if (!this.navArrived) {
+          if (distDesired > FARM_TOL) {
+            this.navStatus = "to-farm";
+            this.navPath = null;
+            this.moveToward(desired.x, desired.y);
+            return;
+          }
           this.navArrived = true;
           this.stopMoving();
           // Use PetCARL while farming — never the miner pet ("Woody"),

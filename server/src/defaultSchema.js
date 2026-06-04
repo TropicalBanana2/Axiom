@@ -977,8 +977,8 @@ function computeSpots(tree, stone, n) {
   const px = -ay / D, py = ax / D;               // unit perpendicular
   const REACH = 150;                             // ~harvest reach
   const maxO = Math.sqrt(Math.max(400, REACH * REACH - (D / 2) * (D / 2)));
-  let spacing = (n > 1) ? Math.min(64, (2 * maxO) / (n - 1)) : 0;
-  spacing = Math.max(spacing, 44);               // never let bodies overlap
+  let spacing = (n > 1) ? Math.min(68, (2 * maxO) / (n - 1)) : 0;
+  spacing = Math.max(spacing, 60);               // > player diameter so bodies don't shove
   const spots = new Array(n);
   for (let i = 0; i < n; i++) {
     let o = (i - (n - 1) / 2) * spacing;          // centred, both sides of midpoint
@@ -1351,7 +1351,7 @@ else if (controlId === 'bs-unpin') {
 };
 
 const DEFAULT_SCHEMA = {
-  schemaVersion: 18,
+  schemaVersion: 19,
   meta: {
     name: "Axiom",
     version: "0.1.0",
