@@ -144,8 +144,11 @@ Bot behaviours (`autoFarm`, `autoHeal`, `autoReconnect`, etc.) live on
 the Bot instance itself. The detail panel for a selected session
 mutates the *correct* bot every time.
 
-Sessions, server-level flags, and party-refiller PSKs are persisted in
-SQLite — `data/axiom.db`. `pm2 restart` no longer wipes everything.
+Server-level flags, party-refiller PSKs, and the panel schema are
+persisted in SQLite — `data/axiom.db` — and survive `pm2 restart`.
+Sessions are **not** restored: a `pm2 restart` ends the live zombs.io
+connections (the in-game character is gone), so leftover session rows are
+purged on boot rather than offering a misleading "restored" session.
 
 ## Capabilities
 
