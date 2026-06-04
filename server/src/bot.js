@@ -400,20 +400,20 @@ class Bot extends EventEmitter {
     // per-bot). In Axiom autoBreakIn is per-bot and user-controlled,
     // so we preserve whatever the dashboard set.
 
-    // EXACT Banshee init sequence (zombsSessions.js:1547-1598).
-    // Order matters — Banshee equips BOTH pets in this order so
-    // PetMiner ends up as the active pet. The 26 up:1 packets register
-    // the character with the server so it isn't flagged as AFK and so
-    // entity-update streaming begins. The Metrics RPC sends fake but
-    // realistic client telemetry that zombs.io expects from real
-    // browser clients.
+    // Banshee init sequence (zombsSessions.js:1547-1598). The 26 up:1
+    // packets register the character with the server so it isn't flagged
+    // as AFK and so entity-update streaming begins. The Metrics RPC sends
+    // fake but realistic client telemetry that zombs.io expects from real
+    // browser clients. We buy both pets but equip PetCARL LAST so CARL is
+    // the active pet — never the miner pet ("Woody"), which would wander
+    // off chopping resources.
     this.sendInput({ mouseMoved: 15 });
     this.sendRpc("JoinPartyByShareKey", { partyShareKey: this.psk || "" });
     this.sendRpc("BuyItem", { itemName: "HatHorns", tier: 1 });
-    this.sendRpc("BuyItem", { itemName: "PetCARL",  tier: 1 });
     this.sendRpc("BuyItem", { itemName: "PetMiner", tier: 1 });
-    this.sendRpc("EquipItem", { itemName: "PetCARL",  tier: 1 });
+    this.sendRpc("BuyItem", { itemName: "PetCARL",  tier: 1 });
     this.sendRpc("EquipItem", { itemName: "PetMiner", tier: 1 });
+    this.sendRpc("EquipItem", { itemName: "PetCARL",  tier: 1 });
     // 26 directional pings — same count Banshee uses. This is the
     // "random directional movement on load" — the character wobbles
     // briefly upward, registering its presence with the zombs.io
@@ -904,7 +904,13 @@ class Bot extends EventEmitter {
     // preserved so they all still aim at the resource.
     let farm = this.farmSpot;
     if (farm && this._farmSlot) {
-      farm = { x: farm.x + this._farmSlot.dx, y: farm.y + this._farmSlot.dy, angle: farm.angle };
+      const fs = this._farmSlot;
+      farm = {
+        x: farm.x + fs.dx, y: farm.y + fs.dy,
+        // Ringed bots aim inward at the resource cluster; a lone bot keeps
+        // the configured aim.
+        angle: (fs.angle != null) ? fs.angle : farm.angle,
+      };
     }
 
     // Desired resting location for the current intent.
@@ -928,7 +934,10 @@ class Bot extends EventEmitter {
         if (!this.navArrived) {
           this.navArrived = true;
           this.stopMoving();
-          this.sendRpc("EquipItem", { itemName: "PetMiner", tier: 1 });
+          // Use PetCARL while farming — never the miner pet ("Woody"),
+          // which wanders off to chop random resources and pulls the
+          // formation apart. The bot harvests via its own swings.
+          this.sendRpc("EquipItem", { itemName: "PetCARL", tier: 1 });
         }
         this.navStatus = "farming";
         this.attackAngle(farm.angle);
@@ -1042,7 +1051,8 @@ class Bot extends EventEmitter {
 
   _tickAutoFarm() {
     if (!this.petActivated) {
-      this.sendRpc("EquipItem", { itemName: "PetMiner", tier: 1 });
+      // PetCARL only while farming — never the miner pet ("Woody").
+      this.sendRpc("EquipItem", { itemName: "PetCARL", tier: 1 });
     }
 
     // Release condition depends on what we're farming:

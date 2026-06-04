@@ -548,14 +548,18 @@ function assignFarmSlots(allBots) {
   }
   for (const grp of groups.values()) {
     const n = grp.length;
-    if (n === 1) { grp[0]._farmSlot = { dx: 0, dy: 0 }; continue; }
+    if (n === 1) { grp[0]._farmSlot = { dx: 0, dy: 0, angle: null }; continue; }
     grp.sort((a, b) => a.id - b.id);   // deterministic slot assignment
     // Ring radius so adjacent bots don't overlap (~2·playerRadius arc
     // spacing) but stay tight enough to keep both resources in range.
     const R = Math.min(72, Math.max(36, n * 13));
     for (let i = 0; i < n; i++) {
       const ang = (2 * Math.PI * i) / n - Math.PI / 2;   // first slot = north
-      grp[i]._farmSlot = { dx: Math.round(Math.cos(ang) * R), dy: Math.round(Math.sin(ang) * R) };
+      const dx = Math.round(Math.cos(ang) * R), dy = Math.round(Math.sin(ang) * R);
+      // Aim INWARD (back toward the farm centre) so each ringed bot swings
+      // at the tree/stone sitting in the middle. 0 = up, clockwise.
+      const aim = Math.round((Math.atan2(-dy, -dx) * 180 / Math.PI + 450) % 360);
+      grp[i]._farmSlot = { dx, dy, angle: aim };
     }
   }
 }

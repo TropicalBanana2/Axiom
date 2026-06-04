@@ -514,7 +514,28 @@
     host.appendChild(canvas);
     document.body.appendChild(host);
     const labels = new Map();   // session id -> label div
+    const labelState = new Map(); // session id -> { text, border } (skip redundant writes)
     const smooth = new Map();   // session id -> { x, y } eased world position
+    const ctx = canvas.getContext("2d");
+
+    // Cache the viewport size; reading host.clientWidth every frame while
+    // also writing label styles forces a synchronous reflow each frame
+    // (a big source of the "laggy" feel). Update only on resize instead.
+    let vw = host.clientWidth, vh = host.clientHeight;
+    const syncSize = () => {
+      vw = host.clientWidth; vh = host.clientHeight;
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = (vw * dpr) | 0; canvas.height = (vh * dpr) | 0;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+    window.addEventListener("resize", syncSize);
+    syncSize();
+
+    // Throttle the overlay to ~30fps. The fleet snapshot only updates a
+    // few times a second and the positions are interpolated, so 30fps
+    // looks identical while leaving the game's own 60fps render loop alone.
+    let lastDraw = 0;
+    const FRAME_MS = 33;
 
     // The bot's smooth WORLD position. For bots loaded in this view we
     // replicate the game's own tick interpolation (lerp fromTick→targetTick
@@ -546,67 +567,80 @@
       return disp;
     }
 
-    function frame() {
+    function frame(now) {
+      requestAnimationFrame(frame);
+      if (now - lastDraw < FRAME_MS) return;   // throttle to ~30fps
+      lastDraw = now;
       try {
         const game = window.game;
         const renderer = game && game.world && game.world.renderer;
         const fleet = window.__axiomFleet || [];
-        if (renderer && renderer.worldToScreen) {
-          const dpr = window.devicePixelRatio || 1;
-          const W = host.clientWidth, Hh = host.clientHeight;
-          if (canvas.width !== (W * dpr | 0) || canvas.height !== (Hh * dpr | 0)) {
-            canvas.width = W * dpr | 0; canvas.height = Hh * dpr | 0;
+        if (!renderer || !renderer.worldToScreen) return;
+        ctx.clearRect(0, 0, vw, vh);
+        const seen = new Set();
+        // Batch every line into ONE path (one stroke call) instead of
+        // toggling line-dash and stroking per bot.
+        ctx.strokeStyle = "rgba(125,211,252,0.5)"; ctx.lineWidth = 2;
+        ctx.beginPath();
+        const dots = [];
+        for (const b of fleet) {
+          const wp = worldPos(game, b);
+          if (!wp) continue;
+          const sp = renderer.worldToScreen(wp.x, wp.y);
+          if (!sp) continue;
+          b._sp = sp;   // stash for the label pass
+          const dest = (b.navStatus === "to-farm" || b.navStatus === "farming") ? b.farmSpot
+                     : (b.navStatus === "returning") ? b.base : null;
+          if (dest) {
+            const dsp = renderer.worldToScreen(dest.x, dest.y);
+            if (dsp) { ctx.moveTo(sp.x, sp.y); ctx.lineTo(dsp.x, dsp.y); dots.push(dsp); }
           }
-          const ctx = canvas.getContext("2d");
-          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-          ctx.clearRect(0, 0, W, Hh);
-          const seen = new Set();
-          for (const b of fleet) {
-            // Smooth, tick-interpolated world position (see worldPos).
-            const wp = worldPos(game, b);
-            if (!wp) continue;
-            const sp = renderer.worldToScreen(wp.x, wp.y);
-            if (!sp) continue;
-            // Destination line (where it's going).
-            const dest = (b.navStatus === "to-farm" || b.navStatus === "farming") ? b.farmSpot
-                       : (b.navStatus === "returning") ? b.base : null;
-            if (dest) {
-              const dsp = renderer.worldToScreen(dest.x, dest.y);
-              if (dsp) {
-                ctx.strokeStyle = "rgba(125,211,252,0.55)"; ctx.lineWidth = 2;
-                ctx.setLineDash([5, 5]);
-                ctx.beginPath(); ctx.moveTo(sp.x, sp.y); ctx.lineTo(dsp.x, dsp.y); ctx.stroke();
-                ctx.setLineDash([]);
-                ctx.fillStyle = "rgba(125,211,252,0.30)";
-                ctx.beginPath(); ctx.arc(dsp.x, dsp.y, 7, 0, Math.PI * 2); ctx.fill();
-              }
-            }
-            // Floating label (clickable).
-            seen.add(b.id);
-            let lab = labels.get(b.id);
-            if (!lab) {
-              lab = document.createElement("div");
-              lab.style.cssText = "position:absolute;transform:translate(-50%,-100%);pointer-events:auto;cursor:pointer;white-space:nowrap;font:600 12px ui-monospace,monospace;color:#fff;background:rgba(0,0,0,0.6);border:1px solid rgba(255,255,255,0.18);border-radius:4px;padding:1px 6px;text-shadow:0 1px 2px #000";
-              lab.title = "Open / focus this session's tab";
-              lab.addEventListener("click", () => openOrFocusAttach(b.id));
-              host.appendChild(lab);
-              labels.set(b.id, lab);
-            }
-            lab.textContent = b.label || ("#" + b.id);
-            lab.style.left = sp.x.toFixed(1) + "px";
-            lab.style.top = (sp.y - 54).toFixed(1) + "px";
-            lab.style.borderColor = b.dead ? "rgba(248,113,113,0.7)"
-              : b.navStatus === "farming" ? "rgba(74,222,128,0.7)"
-              : (b.navStatus === "returning" || b.navStatus === "to-farm") ? "rgba(125,211,252,0.7)"
-              : "rgba(255,255,255,0.18)";
-            lab.style.display = "";
+        }
+        ctx.stroke();
+        // Destination dots in one fill batch.
+        if (dots.length) {
+          ctx.fillStyle = "rgba(125,211,252,0.30)";
+          ctx.beginPath();
+          for (const d of dots) { ctx.moveTo(d.x + 7, d.y); ctx.arc(d.x, d.y, 7, 0, Math.PI * 2); }
+          ctx.fill();
+        }
+        // Labels (DOM). Only write properties that actually changed.
+        for (const b of fleet) {
+          const sp = b._sp; if (!sp) continue;
+          seen.add(b.id);
+          let lab = labels.get(b.id);
+          if (!lab) {
+            lab = document.createElement("div");
+            lab.style.cssText = "position:absolute;transform:translate(-50%,-100%);pointer-events:auto;cursor:pointer;white-space:nowrap;font:600 12px ui-monospace,monospace;color:#fff;background:rgba(0,0,0,0.6);border:1px solid rgba(255,255,255,0.18);border-radius:4px;padding:1px 6px;text-shadow:0 1px 2px #000";
+            lab.title = "Open / focus this session's tab";
+            const id = b.id;
+            lab.addEventListener("click", () => openOrFocusAttach(id));
+            host.appendChild(lab);
+            labels.set(b.id, lab);
+            labelState.set(b.id, { text: "", border: "", hidden: false });
           }
-          for (const [id, lab] of labels) {
-            if (!seen.has(id)) { lab.style.display = "none"; smooth.delete(id); }
+          // Position changes every frame; transform is GPU-cheap and skips
+          // layout. Use translate3d so the label rides on the compositor.
+          lab.style.transform = "translate3d(" + (sp.x | 0) + "px," + ((sp.y | 0) - 54) + "px,0) translate(-50%,-100%)";
+          const st = labelState.get(b.id);
+          const text = b.label || ("#" + b.id);
+          const border = b.dead ? "rgba(248,113,113,0.7)"
+            : b.navStatus === "farming" ? "rgba(74,222,128,0.7)"
+            : (b.navStatus === "returning" || b.navStatus === "to-farm") ? "rgba(125,211,252,0.7)"
+            : "rgba(255,255,255,0.18)";
+          if (st.text !== text) { lab.textContent = text; st.text = text; }
+          if (st.border !== border) { lab.style.borderColor = border; st.border = border; }
+          if (st.hidden) { lab.style.display = ""; st.hidden = false; }
+          b._sp = null;
+        }
+        for (const [id, lab] of labels) {
+          if (!seen.has(id)) {
+            const st = labelState.get(id);
+            if (!st || !st.hidden) { lab.style.display = "none"; if (st) st.hidden = true; }
+            smooth.delete(id);
           }
         }
       } catch {}
-      requestAnimationFrame(frame);
     }
     requestAnimationFrame(frame);
   }

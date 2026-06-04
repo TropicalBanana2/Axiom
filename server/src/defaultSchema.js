@@ -935,6 +935,77 @@ const grantNext = () => {
 };
 grantNext();`),
 
+  // ── Smart Farm Setup ──
+  // Click a tree, then a nearby stone. Every bot in your party is sent to
+  // farm that pair, fanned out (server-side assignFarmSlots) so each can
+  // reach both. Picks are screen→world via the renderer; the party session
+  // list comes from the live fleet; commands go over a short-lived
+  // sessions WS (same channel the clones tool uses).
+  scr_smartFarm: scr("scr_smartFarm", "Smart Farm Setup",
+    `const game = ctx.game.game;
+const rend = game && game.world && game.world.renderer;
+if (!rend || !rend.screenToWorld) { ctx.toast('Smart Farm: load the world first'); return; }
+const SF = (window.__axiomSmartFarm = window.__axiomSmartFarm || {});
+if (SF.cleanup) { SF.cleanup(); SF.cleanup = null; }   // re-arm cleanly
+SF.picks = [];
+
+const nearest = (wx, wy, model) => {
+  let best = null, bestD = Infinity;
+  for (const e of game.world.entities.values()) {
+    const t = e.targetTick;
+    if (!t || t.model !== model || !t.position) continue;
+    const d = Math.hypot(t.position.x - wx, t.position.y - wy);
+    if (d < bestD) { bestD = d; best = t.position; }
+  }
+  return (best && bestD < 700) ? { x: best.x, y: best.y } : null;
+};
+
+function apply(tree, stone) {
+  const cx = Math.round((tree.x + stone.x) / 2);
+  const cy = Math.round((tree.y + stone.y) / 2);
+  const ang = Math.round((Math.atan2(tree.y - cy, tree.x - cx) * 180 / Math.PI + 450) % 360);
+  const pid = game.ui && game.ui.playerPartyId;
+  const fleet = (window.__axiomFleet || []).filter((b) => b.partyId === pid);
+  const ids = fleet.length ? fleet.map((b) => b.id) : (window.__axiomFleet || []).map((b) => b.id);
+  if (!ids.length) { ctx.toast('Smart Farm: no party sessions found'); return; }
+  const token = localStorage.getItem('axiom.token');
+  let ws; try { ws = new WebSocket('ws://' + location.hostname + ':8090'); } catch { ctx.toast('Smart Farm: WS failed'); return; }
+  ws.onopen = () => ws.send(JSON.stringify({ op: 'auth', args: { token } }));
+  ws.onmessage = (m) => {
+    let f; try { f = JSON.parse(m.data); } catch { return; }
+    if (f.op === 'ready') {
+      for (const id of ids) {
+        ws.send(JSON.stringify({ op: 'setFarmSpot', sid: id, args: { x: cx, y: cy, angle: ang } }));
+        ws.send(JSON.stringify({ op: 'setNav', sid: id, args: { on: true } }));
+      }
+      ctx.toast('Smart Farm: ' + ids.length + ' bot(s) farming the tree+stone');
+      setTimeout(() => { try { ws.close(); } catch {} }, 600);
+    }
+  };
+  ws.onerror = () => ctx.toast('Smart Farm: sessions WS error');
+}
+
+const onDown = (e) => {
+  if (e.target && e.target.closest && e.target.closest('.ax-panel')) return;  // ignore panel clicks
+  e.preventDefault(); e.stopPropagation();
+  const w = rend.screenToWorld(e.clientX, e.clientY);
+  if (!w) return;
+  if (SF.picks.length === 0) {
+    const tree = nearest(w.x, w.y, 'Tree');
+    if (!tree) { ctx.toast('No tree near that click — try again'); return; }
+    SF.picks.push(tree); ctx.toast('Tree set ✓ — now click the STONE');
+  } else {
+    const stone = nearest(w.x, w.y, 'Stone');
+    if (!stone) { ctx.toast('No stone near that click — try again'); return; }
+    SF.picks.push(stone);
+    if (SF.cleanup) { SF.cleanup(); SF.cleanup = null; }
+    apply(SF.picks[0], SF.picks[1]);
+  }
+};
+window.addEventListener('mousedown', onDown, true);
+SF.cleanup = () => window.removeEventListener('mousedown', onDown, true);
+if (ctx.toast) ctx.toast('Smart Farm: click the TREE (then the stone)…');`),
+
   // ── Base Saver ──
   // One script dispatches every BaseSaver action via controlId so all
   // controls share state (the saved bases + pins) without recompiling
@@ -1220,7 +1291,7 @@ else if (controlId === 'bs-unpin') {
 };
 
 const DEFAULT_SCHEMA = {
-  schemaVersion: 14,
+  schemaVersion: 15,
   meta: {
     name: "Axiom",
     version: "0.1.0",
@@ -1264,6 +1335,15 @@ const DEFAULT_SCHEMA = {
     {
       id: "build", name: "Build", icon: null,
       sections: [
+        {
+          id: "build-smartfarm", name: "Smart Farm", collapsible: true, defaultOpen: true,
+          controls: [
+            { type: "text", id: "smartfarm-info",
+              defaultValue: "Click below, then pick a tree and a nearby stone in the world. Every party bot is sent to farm that pair, fanned out so each can reach both." },
+            { type: "button", id: "smartfarm-setup", label: "Smart Farm Setup", scriptId: "scr_smartFarm",
+              tooltip: "Arms pick mode: click a tree, then a stone. All party sessions are sent to farm them." },
+          ],
+        },
         {
           id: "build-auto", name: "Automation", collapsible: true, defaultOpen: true,
           controls: [
