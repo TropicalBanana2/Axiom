@@ -182,6 +182,31 @@ class Bot extends EventEmitter {
     return this.navBase;
   }
 
+  // Lightweight live snapshot for the fleet overlay (dashboard map +
+  // in-game labels/destinations). Returns null until the bot is in-world.
+  fleetInfo() {
+    const p = this.myPlayer && this.myPlayer.position;
+    if (!p) return null;
+    const home = this._homePoint();
+    return {
+      id: this.id,
+      label: this.label,
+      uid: this.uid || null,
+      partyId: (this.myPlayer && this.myPlayer.partyId) || null,
+      serverId: this.serverId,
+      dead: !!(this.myPlayer && this.myPlayer.dead),
+      pos: { x: p.x | 0, y: p.y | 0 },
+      navStatus: this.navStatus || "idle",
+      navActive: !!this.navActive,
+      base: home ? { x: home.x | 0, y: home.y | 0 } : null,
+      farmSpot: this.farmSpot ? { x: this.farmSpot.x | 0, y: this.farmSpot.y | 0 } : null,
+      // Only stream the path while actually moving (keeps payload small).
+      path: (this.navActive && this.navPath)
+        ? this.navPath.map((w) => ({ x: w.x | 0, y: w.y | 0 }))
+        : null,
+    };
+  }
+
   // Controller intent. on=true → go farm (capturing the current base
   // position as "home" the first time). on=false → return to home, then
   // settle idle.

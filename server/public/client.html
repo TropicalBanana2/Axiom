@@ -329,6 +329,9 @@
               try { document.title = f.data.label + " · axiom"; } catch {}
             }
             this.applyVerifyData(f.data);
+          } else if (f.op === "fleet") {
+            // Live party fleet (positions + nav) for the in-game overlay.
+            window.__axiomFleet = f.data || [];
           } else if (f.op === "error") {
             document.body.insertAdjacentHTML("afterbegin",
               `<div style="position:fixed;top:8px;left:50%;transform:translateX(-50%);background:#f87171;color:#000;padding:6px 14px;border-radius:6px;font:12px var(--font);z-index:99999">attach error: ${f.data?.reason || "unknown"}</div>`);

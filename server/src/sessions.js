@@ -521,6 +521,24 @@ setInterval(() => {
   }
 }, 3000);
 
+// Fast fleet broadcast — live positions + nav for every in-world bot,
+// fanned out to all of a user's connections (dashboard party map AND each
+// /play tab's overlay). Much lighter than the full session list, so it
+// runs several times a second. Built once per user, then shared.
+setInterval(() => {
+  const byUser = new Map();   // userId -> [fleetInfo, ...]
+  for (const bot of bots.values()) {
+    const info = bot.fleetInfo && bot.fleetInfo();
+    if (!info) continue;
+    if (!byUser.has(bot._userId)) byUser.set(bot._userId, []);
+    byUser.get(bot._userId).push(info);
+  }
+  for (const ws of connections.values()) {
+    if (!ws.authed) continue;
+    send(ws, { op: "fleet", data: byUser.get(ws.userId) || [] });
+  }
+}, 400);
+
 // Graceful shutdown — close every bot's socket cleanly, then exit.
 // Rows are left as-is; the next process boot will purgeStaleSessions().
 function gracefulExit() {

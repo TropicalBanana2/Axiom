@@ -37,6 +37,7 @@
     smartUpgrade: { aheadBy: 2, farmWhenSaving: true, parties: [] },  // config
     smartUpgradeStatus: null,                        // live status from server
     pendingPartyCreate: null,                        // two-phase party spawn state
+    fleet: [],                                       // live bot positions/nav
   };
 
   // ----- auth (no-login mode) -----
@@ -125,6 +126,10 @@
           state.sessions = f.data || [];
           renderSessions();
           tickPartyCreate();
+          break;
+        case "fleet":
+          state.fleet = f.data || [];
+          drawFleetMap();   // live-refresh the party map if one's open
           break;
         case "created":
           ws.send(JSON.stringify({ op: "list" }));
@@ -556,6 +561,131 @@
     toast(`Spawning "${label}" into the party…`);
   }
 
+  // Open the /play attach tab for a session, or focus it if one is
+  // already open. The window NAME (axiom_attach_<id>) is the focus key:
+  // window.open with an existing name reuses that tab instead of making
+  // a new one.
+  function openOrFocusAttach(id) {
+    if (id == null) return;
+    const w = window.open(`/play?attach=${id}`, `axiom_attach_${id}`);
+    if (w) { try { w.focus(); } catch {} }
+  }
+
+  // ----- party fleet map -----
+  // Bots belonging to the currently-open party (matched via the session
+  // list so it tracks whatever partyIdOf resolves to).
+  function fleetForOpenParty() {
+    if (!state.selectedParty) return [];
+    const { serverId, partyId } = state.selectedParty;
+    const ids = new Set(state.sessions
+      .filter((s) => s.serverId === serverId && String(partyIdOf(s)) === String(partyId))
+      .map((s) => s.id));
+    return (state.fleet || []).filter((b) => ids.has(b.id));
+  }
+  function drawFleetMap() {
+    const pm = state._partyMap;
+    if (!pm || !pm.canvas || !pm.canvas.isConnected) return;
+    const cv = pm.canvas, ctx = cv.getContext("2d");
+    const dpr = window.devicePixelRatio || 1;
+    const W = cv.clientWidth || 600, H = cv.clientHeight || 340;
+    if (cv.width !== (W * dpr) | 0 || cv.height !== (H * dpr) | 0) {
+      cv.width = (W * dpr) | 0; cv.height = (H * dpr) | 0;
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    pm.hits = [];
+
+    const bots = fleetForOpenParty();
+    // Collect every world point we'll draw so we can fit the view.
+    const pts = [];
+    for (const b of bots) {
+      if (b.pos) pts.push(b.pos);
+      if (b.base) pts.push(b.base);
+      if (b.farmSpot) pts.push(b.farmSpot);
+      if (b.path) for (const p of b.path) pts.push(p);
+    }
+    if (pts.length === 0) {
+      ctx.fillStyle = "#555"; ctx.font = "12px ui-monospace, monospace";
+      ctx.textAlign = "center";
+      ctx.fillText("waiting for live positions…", W / 2, H / 2);
+      return;
+    }
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of pts) {
+      if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+    }
+    // Pad + keep a minimum span so a tight cluster isn't hugely zoomed.
+    const PAD = 80, MIN_SPAN = 600;
+    let spanX = Math.max(maxX - minX, MIN_SPAN), spanY = Math.max(maxY - minY, MIN_SPAN);
+    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+    minX = cx - spanX / 2 - PAD; maxX = cx + spanX / 2 + PAD;
+    minY = cy - spanY / 2 - PAD; maxY = cy + spanY / 2 + PAD;
+    const scale = Math.min(W / (maxX - minX), H / (maxY - minY));
+    const offX = (W - (maxX - minX) * scale) / 2;
+    const offY = (H - (maxY - minY) * scale) / 2;
+    const tx = (x) => (x - minX) * scale + offX;
+    const ty = (y) => (y - minY) * scale + offY;
+
+    // Paths first (under everything).
+    for (const b of bots) {
+      if (!b.path || b.path.length < 2) continue;
+      ctx.strokeStyle = "rgba(125,211,252,0.35)"; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(tx(b.path[0].x), ty(b.path[0].y));
+      for (const p of b.path) ctx.lineTo(tx(p.x), ty(p.y));
+      ctx.stroke();
+    }
+    // Base markers (◆) — dedupe identical points so a shared base
+    // doesn't overdraw.
+    const drawnBase = new Set();
+    for (const b of bots) {
+      if (!b.base) continue;
+      const key = b.base.x + "," + b.base.y;
+      if (drawnBase.has(key)) continue; drawnBase.add(key);
+      const x = tx(b.base.x), y = ty(b.base.y);
+      ctx.fillStyle = "#fcd34d";
+      ctx.beginPath(); ctx.moveTo(x, y - 6); ctx.lineTo(x + 6, y); ctx.lineTo(x, y + 6); ctx.lineTo(x - 6, y); ctx.closePath();
+      ctx.fill();
+    }
+    // Farm markers (✛).
+    const drawnFarm = new Set();
+    for (const b of bots) {
+      if (!b.farmSpot) continue;
+      const key = b.farmSpot.x + "," + b.farmSpot.y;
+      if (drawnFarm.has(key)) continue; drawnFarm.add(key);
+      const x = tx(b.farmSpot.x), y = ty(b.farmSpot.y);
+      ctx.strokeStyle = "#4ade80"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(x - 6, y); ctx.lineTo(x + 6, y); ctx.moveTo(x, y - 6); ctx.lineTo(x, y + 6); ctx.stroke();
+    }
+    // Bots on top.
+    for (const b of bots) {
+      if (!b.pos) continue;
+      const x = tx(b.pos.x), y = ty(b.pos.y);
+      const moving = b.navStatus === "to-farm" || b.navStatus === "returning";
+      const farming = b.navStatus === "farming";
+      const color = b.dead ? "#f87171" : farming ? "#4ade80" : moving ? "#7dd3fc" : "#9ca3af";
+      ctx.fillStyle = color;
+      ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "rgba(0,0,0,0.6)"; ctx.lineWidth = 1; ctx.stroke();
+      // Label above.
+      ctx.fillStyle = "#e5e7eb"; ctx.font = "11px ui-monospace, monospace"; ctx.textAlign = "center";
+      ctx.fillText(b.label || ("#" + b.id), x, y - 9);
+      pm.hits.push({ x, y, r: 9, id: b.id });
+    }
+  }
+  function handleFleetMapClick(e) {
+    const pm = state._partyMap;
+    if (!pm || !pm.canvas) return;
+    const rect = pm.canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    let best = null, bestD = Infinity;
+    for (const h of (pm.hits || [])) {
+      const d = Math.hypot(h.x - mx, h.y - my);
+      if (d <= Math.max(h.r, 12) && d < bestD) { bestD = d; best = h; }
+    }
+    if (best) openOrFocusAttach(best.id);
+  }
+
   // ----- party menu -----
   // Finds the live smart-upgrade status group for the selected party.
   function partyStatusGroup() {
@@ -584,6 +714,20 @@
         el("button", { class: "ax-btn",
           onclick: () => sessions[0] && spawnIntoParty(sessions[0]) }, "+ Spawn in party"))
     ));
+
+    // Live party map (base + bots + farm spots + paths)
+    const mapCard = el("div", { class: "ax-card" },
+      el("div", { class: "ax-card-title" }, "party map"),
+      el("div", { class: "ax-card-hint" },
+        "Live overhead view. ◆ base · ✛ farm · ● bot (green=farming, blue=moving, grey=idle). Click a bot to open or focus its tab."));
+    const mapCanvas = el("canvas", {
+      style: "width:100%;height:340px;display:block;border-radius:8px;background:#0c0c0e;border:1px solid var(--border);margin-top:8px;cursor:pointer",
+    });
+    mapCard.appendChild(mapCanvas);
+    main.appendChild(mapCard);
+    state._partyMap = { canvas: mapCanvas, hits: [] };
+    mapCanvas.onclick = (e) => handleFleetMapClick(e);
+    setTimeout(drawFleetMap, 0);
 
     // Smart Upgrade card
     const suToggle = el("button", { class: `ax-toggle ${enabled ? "on" : ""}` });
