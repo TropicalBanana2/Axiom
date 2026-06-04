@@ -124,12 +124,19 @@ class Bot extends EventEmitter {
     //              tick keeps running until home is reached).
     // navActive:   derived getter — true while any navigation is live.
     this.farmSpot = null;
+    // farmFixed: this bot has an explicit, predetermined farm spot (set by
+    // Smart Farm Setup) — don't apply the dynamic ring offset on top of it.
+    this.farmFixed = false;
     this.navIntent = "idle";
     this.navHome = null;
     // navBase: {x,y} — the explicit base anchor the user sets by
     // positioning the bot where they want it and starting smart upgrade.
     // Takes priority over the GoldStash / spawn fallback in _homePoint().
     this.navBase = null;
+    // When farming is turned OFF, return to base ONLY if this is set —
+    // which Smart Farm Setup does. Otherwise the bot just stops where it
+    // is (the user doesn't want every farm-disable to trek home).
+    this.returnToBase = false;
     this.navReturning = false;
     this.navPath = null;             // [{x,y}, ...] remaining waypoints
     this.navIndex = 0;
@@ -240,11 +247,12 @@ class Bot extends EventEmitter {
       this.navPath = null; this.navIndex = 0; this.navArrived = false;
     } else {
       this.navIntent = "idle";
-      // If we're away from home, walk back; else just settle.
       const me = this.myPlayer && this.myPlayer.position;
       const home = this._homePoint();
       const away = me && home && Math.hypot(me.x - home.x, me.y - home.y) > 80;
-      if (away) {
+      // Only walk home on disable when returnToBase is set (Smart Farm).
+      // Otherwise just stop in place — no trek back to base.
+      if (away && this.returnToBase) {
         this.navReturning = true;
         this.navPath = null; this.navIndex = 0; this.navArrived = false;
         this.navStatus = "returning";

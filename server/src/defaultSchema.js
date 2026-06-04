@@ -960,26 +960,54 @@ const nearest = (wx, wy, model) => {
   return (best && bestD < 700) ? { x: best.x, y: best.y } : null;
 };
 
+// Predetermined, distinct standing spots — split the bots between the
+// tree and the stone, each standing just outside its resource (no overlap)
+// and aiming straight at it. Bots fan along the OUTER arc (the side facing
+// away from the other resource) so the two groups don't crowd each other.
+function computeSpots(tree, stone, n) {
+  const RES = [{ p: tree, r: 64 }, { p: stone, r: 48 }];  // tree/stone radii
+  const groups = [[], []];
+  for (let i = 0; i < n; i++) groups[i % 2].push(i);       // round-robin
+  const spots = new Array(n);
+  for (let r = 0; r < 2; r++) {
+    const c = RES[r].p, other = RES[1 - r].p;
+    const stand = RES[r].r + 30;                            // outside the hitbox, within swing
+    const away = Math.atan2(c.y - other.y, c.x - other.x);  // bearing away from the other resource (rad)
+    const list = groups[r], k = list.length;
+    const ARC = Math.PI * 1.1;                              // ~200° spread on the outer side
+    for (let j = 0; j < k; j++) {
+      const t = (k === 1) ? 0 : (j / (k - 1) - 0.5);        // -0.5 … 0.5
+      const a = away + t * ARC;
+      const sx = Math.round(c.x + Math.cos(a) * stand);
+      const sy = Math.round(c.y + Math.sin(a) * stand);
+      // Aim from the spot back at the resource (game frame: 0 = up, CW).
+      const aim = Math.round((Math.atan2(c.y - sy, c.x - sx) * 180 / Math.PI + 450) % 360);
+      spots[list[j]] = { x: sx, y: sy, angle: aim };
+    }
+  }
+  return spots;
+}
+
 function apply(tree, stone) {
-  const cx = Math.round((tree.x + stone.x) / 2);
-  const cy = Math.round((tree.y + stone.y) / 2);
-  const ang = Math.round((Math.atan2(tree.y - cy, tree.x - cx) * 180 / Math.PI + 450) % 360);
   const pid = game.ui && game.ui.playerPartyId;
-  const fleet = (window.__axiomFleet || []).filter((b) => b.partyId === pid);
-  const ids = fleet.length ? fleet.map((b) => b.id) : (window.__axiomFleet || []).map((b) => b.id);
+  const all = window.__axiomFleet || [];
+  const fleet = all.filter((b) => b.partyId === pid);
+  const ids = (fleet.length ? fleet : all).map((b) => b.id).sort((a, b) => a - b);
   if (!ids.length) { ctx.toast('Smart Farm: no party sessions found'); return; }
+  const spots = computeSpots(tree, stone, ids.length);     // one distinct spot per bot
   const token = localStorage.getItem('axiom.token');
   let ws; try { ws = new WebSocket('ws://' + location.hostname + ':8090'); } catch { ctx.toast('Smart Farm: WS failed'); return; }
   ws.onopen = () => ws.send(JSON.stringify({ op: 'auth', args: { token } }));
   ws.onmessage = (m) => {
     let f; try { f = JSON.parse(m.data); } catch { return; }
     if (f.op === 'ready') {
-      for (const id of ids) {
-        ws.send(JSON.stringify({ op: 'setFarmSpot', sid: id, args: { x: cx, y: cy, angle: ang } }));
-        ws.send(JSON.stringify({ op: 'setNav', sid: id, args: { on: true } }));
-      }
-      ctx.toast('Smart Farm: ' + ids.length + ' bot(s) farming the tree+stone');
-      setTimeout(() => { try { ws.close(); } catch {} }, 600);
+      ids.forEach((id, idx) => {
+        const s = spots[idx];
+        ws.send(JSON.stringify({ op: 'setFarmSpot', sid: id, args: { x: s.x, y: s.y, angle: s.angle, fixed: true } }));
+        ws.send(JSON.stringify({ op: 'setNav', sid: id, args: { on: true, returnToBase: true } }));
+      });
+      ctx.toast('Smart Farm: ' + ids.length + ' bot(s) assigned to tree + stone');
+      setTimeout(() => { try { ws.close(); } catch {} }, 700);
     }
   };
   ws.onerror = () => ctx.toast('Smart Farm: sessions WS error');
@@ -1291,7 +1319,7 @@ else if (controlId === 'bs-unpin') {
 };
 
 const DEFAULT_SCHEMA = {
-  schemaVersion: 15,
+  schemaVersion: 16,
   meta: {
     name: "Axiom",
     version: "0.1.0",

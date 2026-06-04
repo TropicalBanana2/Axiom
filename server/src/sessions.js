@@ -449,28 +449,37 @@ function handleJsonFrame(ws, raw, authTimer) {
     }
 
     case "setFarmSpot": {
-      // { op:"setFarmSpot", sid, args:{ x, y, angle } | { useCurrent:true } | { clear:true } }
+      // { op:"setFarmSpot", sid, args:{ x, y, angle, fixed? } | { useCurrent } | { clear } }
       const bot = bots.get(frame.sid);
       if (!bot || bot._userId !== ws.userId) return;
       const a = frame.args || {};
       if (a.clear) {
         bot.setFarmSpot(null);
+        bot.farmFixed = false;
       } else if (a.useCurrent && bot.myPlayer && bot.myPlayer.position) {
         // Capture the bot's current position + its current aim as the spot.
         const ang = bot.myPlayer.aimingYaw != null ? bot.myPlayer.aimingYaw : (bot.myPlayer.yaw || 0);
         bot.setFarmSpot(bot.myPlayer.position.x, bot.myPlayer.position.y, ang);
+        bot.farmFixed = false;
       } else if (a.x != null && a.y != null) {
         bot.setFarmSpot(a.x, a.y, a.angle || 0);
+        // Smart Farm sends fixed:true — a predetermined per-bot spot the
+        // ring shouldn't offset. A plain manual set clears the flag.
+        bot.farmFixed = !!a.fixed;
       }
       send(ws, { op: "farmSpot", sid: bot.id, data: bot.farmSpot });
       break;
     }
 
     case "setNav": {
-      // { op:"setNav", sid, args:{ on } }
+      // { op:"setNav", sid, args:{ on, returnToBase? } }
       const bot = bots.get(frame.sid);
       if (!bot || bot._userId !== ws.userId) return;
-      bot.setNavActive(!!(frame.args && frame.args.on));
+      const a = frame.args || {};
+      // returnToBase (set by Smart Farm) controls whether a later nav-off
+      // walks the bot home or just stops it in place.
+      if (a.returnToBase != null) bot.returnToBase = !!a.returnToBase;
+      bot.setNavActive(!!a.on);
       send(ws, { op: "nav", sid: bot.id, data: { active: bot.navActive, spot: bot.farmSpot } });
       break;
     }
@@ -540,6 +549,9 @@ function assignFarmSlots(allBots) {
   const groups = new Map();   // userId|party|tileX|tileY -> [bot, ...]
   for (const bot of allBots) {
     if (!bot.farmSpot) { bot._farmSlot = null; continue; }
+    // Predetermined Smart Farm spots are already distinct per bot — never
+    // ring-offset them (that's what caused bots to fight over one point).
+    if (bot.farmFixed) { bot._farmSlot = { dx: 0, dy: 0, angle: null }; continue; }
     const pid = (bot.myPlayer && bot.myPlayer.partyId) || 0;
     const key = bot._userId + "|" + pid + "|" +
       Math.round(bot.farmSpot.x / 48) + "|" + Math.round(bot.farmSpot.y / 48);
