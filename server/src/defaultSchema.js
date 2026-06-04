@@ -963,25 +963,27 @@ const nearest = (wx, wy, model) => {
   return (best && bestD < 110) ? { x: best.x, y: best.y } : null;
 };
 
-// Predetermined, distinct standing spots so EVERY bot can reach BOTH the
-// tree and the stone (not split between them). We ring the bots around the
-// pair's midpoint and aim each one at the centre, so its swing sweeps the
-// whole cluster. The radius is the largest that still keeps both resources
-// in reach from every ring position, but never so small the bots overlap.
+// Standing spots so EVERY bot can reach BOTH the tree and the stone.
+// We line the bots up along the PERPENDICULAR BISECTOR of the tree↔stone
+// segment: on that line every bot is exactly equidistant to the tree and
+// the stone, so no bot is ever stranded out of range of one of them (the
+// old ring put a bot behind the far resource → "can't get wood"). Each
+// bot aims back at the midpoint, where both resources sit symmetrically in
+// front. Spacing is capped so even the outermost bot stays in reach.
 function computeSpots(tree, stone, n) {
   const mx = (tree.x + stone.x) / 2, my = (tree.y + stone.y) / 2;
-  const sep = Math.hypot(tree.x - stone.x, tree.y - stone.y);  // tree↔stone gap
-  const REACH = 150;                          // ~harvest reach from a spot
-  const spacingR = Math.max(34, 9 * n);       // keep adjacent bots ~1 body apart
-  const reachR = Math.max(34, REACH - sep / 2);  // stay in range of the FAR resource
-  // Prefer the spacing radius, but never exceed what keeps both in reach.
-  const R = Math.min(reachR, Math.max(spacingR, 42));
+  const ax = stone.x - tree.x, ay = stone.y - tree.y;
+  const D = Math.hypot(ax, ay) || 1;             // tree↔stone gap
+  const px = -ay / D, py = ax / D;               // unit perpendicular
+  const REACH = 150;                             // ~harvest reach
+  const maxO = Math.sqrt(Math.max(400, REACH * REACH - (D / 2) * (D / 2)));
+  let spacing = (n > 1) ? Math.min(64, (2 * maxO) / (n - 1)) : 0;
+  spacing = Math.max(spacing, 44);               // never let bodies overlap
   const spots = new Array(n);
   for (let i = 0; i < n; i++) {
-    const a = (2 * Math.PI * i) / n - Math.PI / 2;   // first slot = north
-    const sx = Math.round(mx + Math.cos(a) * R);
-    const sy = Math.round(my + Math.sin(a) * R);
-    // Aim back at the centre so the swing covers both resources.
+    let o = (i - (n - 1) / 2) * spacing;          // centred, both sides of midpoint
+    if (Math.abs(o) < 1) o = spacing * 0.5;       // never sit exactly on the midpoint
+    const sx = Math.round(mx + px * o), sy = Math.round(my + py * o);
     const aim = Math.round((Math.atan2(my - sy, mx - sx) * 180 / Math.PI + 450) % 360);
     spots[i] = { x: sx, y: sy, angle: aim };
   }
@@ -989,26 +991,31 @@ function computeSpots(tree, stone, n) {
 }
 
 function apply(tree, stone) {
-  const pid = game.ui && game.ui.playerPartyId;
-  const all = window.__axiomFleet || [];
-  const fleet = all.filter((b) => b.partyId === pid);
-  const ids = (fleet.length ? fleet : all).map((b) => b.id).sort((a, b) => a - b);
-  if (!ids.length) { ctx.toast('Smart Farm: no party sessions found'); return; }
-  const spots = computeSpots(tree, stone, ids.length);     // one distinct spot per bot
   const token = localStorage.getItem('axiom.token');
+  const localServer = game.options && game.options.serverId;
+  const pid = game.ui && game.ui.playerPartyId;
   let ws; try { ws = new WebSocket('ws://' + location.hostname + ':8090'); } catch { ctx.toast('Smart Farm: WS failed'); return; }
   ws.onopen = () => ws.send(JSON.stringify({ op: 'auth', args: { token } }));
   ws.onmessage = (m) => {
     let f; try { f = JSON.parse(m.data); } catch { return; }
-    if (f.op === 'ready') {
-      ids.forEach((id, idx) => {
-        const s = spots[idx];
-        ws.send(JSON.stringify({ op: 'setFarmSpot', sid: id, args: { x: s.x, y: s.y, angle: s.angle, fixed: true } }));
-        ws.send(JSON.stringify({ op: 'setNav', sid: id, args: { on: true, returnToBase: true } }));
-      });
-      ctx.toast('Smart Farm: ' + ids.length + ' bot(s) assigned to tree + stone');
-      setTimeout(() => { try { ws.close(); } catch {} }, 700);
-    }
+    if (f.op === 'ready') { ws.send(JSON.stringify({ op: 'list' })); return; }
+    if (f.op !== 'sessions') return;
+    // Authoritative session list (the fleet snapshot was missing bots).
+    // Target every in-world session on THIS server; narrow to my party if
+    // we can tell which party that is.
+    let sess = (f.data || []).filter((s) => !localServer || s.serverId === localServer);
+    const samep = sess.filter((s) => s.party && pid != null && s.party.id === pid);
+    if (samep.length) sess = samep;
+    const ids = sess.map((s) => s.id).sort((a, b) => a - b);
+    if (!ids.length) { ctx.toast('Smart Farm: no sessions on this server'); try { ws.close(); } catch {} return; }
+    const spots = computeSpots(tree, stone, ids.length);
+    ids.forEach((id, idx) => {
+      const s = spots[idx];
+      ws.send(JSON.stringify({ op: 'setFarmSpot', sid: id, args: { x: s.x, y: s.y, angle: s.angle, fixed: true } }));
+      ws.send(JSON.stringify({ op: 'setNav', sid: id, args: { on: true, returnToBase: true } }));
+    });
+    ctx.toast('Smart Farm: ' + ids.length + ' bot(s) assigned to tree + stone');
+    setTimeout(() => { try { ws.close(); } catch {} }, 700);
   };
   ws.onerror = () => ctx.toast('Smart Farm: sessions WS error');
 }
@@ -1344,7 +1351,7 @@ else if (controlId === 'bs-unpin') {
 };
 
 const DEFAULT_SCHEMA = {
-  schemaVersion: 17,
+  schemaVersion: 18,
   meta: {
     name: "Axiom",
     version: "0.1.0",
