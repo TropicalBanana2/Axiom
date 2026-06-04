@@ -182,6 +182,19 @@ class Bot extends EventEmitter {
     return this.navBase;
   }
 
+  // Relocate the bot to an arbitrary world point: make it the new base
+  // anchor and walk there, then idle. Used by the dashboard's "bring
+  // other sessions here" action. Honours the only-farm-or-base model —
+  // the point simply becomes this bot's base.
+  gotoPoint(x, y) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    this.navBase = { x: Math.round(x), y: Math.round(y) };
+    this.navIntent = "idle";
+    this.navReturning = true;
+    this.navPath = null; this.navIndex = 0; this.navArrived = false;
+    this.navStatus = "returning";
+  }
+
   // Lightweight live snapshot for the fleet overlay (dashboard map +
   // in-game labels/destinations). Returns null until the bot is in-world.
   fleetInfo() {

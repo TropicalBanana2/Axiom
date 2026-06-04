@@ -683,7 +683,102 @@
       const d = Math.hypot(h.x - mx, h.y - my);
       if (d <= Math.max(h.r, 12) && d < bestD) { bestD = d; best = h; }
     }
-    if (best) openOrFocusAttach(best.id);
+    if (best) showBotMenu(best.id, e.clientX, e.clientY);
+    else closeBotMenu();
+  }
+
+  // ----- per-bot action menu (party map) -----
+  function closeBotMenu() {
+    const m = document.getElementById("ax-botmenu");
+    if (m) m.remove();
+    if (state._botMenuOff) { document.removeEventListener("mousedown", state._botMenuOff, true); state._botMenuOff = null; }
+  }
+  function showBotMenu(botId, px, py) {
+    closeBotMenu();
+    const fleet = fleetForOpenParty();
+    const me = fleet.find((b) => b.id === botId);
+    const session = state.sessions.find((s) => s.id === botId);
+    const label = (me && me.label) || (session && session.label) || ("#" + botId);
+    const others = fleet.filter((b) => b.id !== botId);
+    const target = me && me.pos;   // where to bring others
+
+    const menu = el("div", { id: "ax-botmenu", style:
+      "position:fixed;z-index:100000;min-width:210px;max-width:280px;background:var(--bg-panel);" +
+      "border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow);padding:6px;" +
+      "font:13px var(--font);color:var(--text)" });
+    menu.onmousedown = (ev) => ev.stopPropagation();   // keep clicks inside
+    menu.appendChild(el("div", { style:
+      "padding:6px 8px 8px;font:600 12px var(--font-mono);color:var(--text-dim);" +
+      "border-bottom:1px solid var(--border);margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" },
+      label));
+
+    const item = (txt, onClick, opts = {}) => {
+      const b = el("button", { class: "ax-btn ghost", style:
+        "display:block;width:100%;text-align:left;margin:2px 0;" + (opts.style || "") }, txt);
+      b.onclick = onClick;
+      if (opts.disabled) { b.disabled = true; b.style.opacity = "0.5"; b.style.cursor = "default"; }
+      menu.appendChild(b);
+      return b;
+    };
+
+    item("▶  Open session", () => { openOrFocusAttach(botId); closeBotMenu(); });
+
+    const farmOn = session && session.behaviours && session.behaviours.autoFarm;
+    item(farmOn ? "✓  Auto farmer (on)" : "⛏  Enable auto farmer", () => {
+      send({ sid: botId, op: "setBehaviour", args: { key: "autoFarm", value: !farmOn } });
+      closeBotMenu();
+    });
+
+    // ── Bring other sessions here (expandable, default none selected) ──
+    const bringBtn = item(
+      "↪  Bring other sessions here" + (others.length ? "" : "  (none)"),
+      () => { sub.style.display = sub.style.display === "none" ? "block" : "none"; },
+      { disabled: !others.length || !target });
+
+    const sub = el("div", { style: "display:none;padding:4px 4px 2px" });
+    const picked = new Set();
+    const confirm = el("button", { class: "ax-btn primary", style: "width:100%;margin-top:6px", disabled: true },
+      "Bring 0 selected");
+    const refresh = () => {
+      confirm.textContent = `Bring ${picked.size} selected`;
+      confirm.disabled = picked.size === 0;
+    };
+    for (const o of others) {
+      const row = el("label", { style:
+        "display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:6px;cursor:pointer;font-size:12px" });
+      const cb = el("input", { type: "checkbox" });
+      cb.onchange = () => { cb.checked ? picked.add(o.id) : picked.delete(o.id); refresh(); };
+      row.appendChild(cb);
+      row.appendChild(el("span", { style: "flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" },
+        o.label || ("#" + o.id)));
+      sub.appendChild(row);
+    }
+    confirm.onclick = () => {
+      if (!target || picked.size === 0) return;
+      for (const id of picked) {
+        send({ sid: id, op: "gotoPoint", args: { x: target.x, y: target.y } });
+      }
+      toast(`Bringing ${picked.size} session${picked.size === 1 ? "" : "s"} to ${label}…`);
+      closeBotMenu();
+    };
+    sub.appendChild(confirm);
+    menu.appendChild(sub);
+    void bringBtn;
+
+    document.body.appendChild(menu);
+    // Position within the viewport.
+    const r = menu.getBoundingClientRect();
+    const x = Math.min(px, window.innerWidth - r.width - 8);
+    const y = Math.min(py, window.innerHeight - r.height - 8);
+    menu.style.left = Math.max(8, x) + "px";
+    menu.style.top = Math.max(8, y) + "px";
+    // Click anywhere OUTSIDE the menu closes it (clicks inside are kept).
+    state._botMenuOff = (ev) => {
+      const m = document.getElementById("ax-botmenu");
+      if (m && m.contains(ev.target)) return;
+      closeBotMenu();
+    };
+    setTimeout(() => document.addEventListener("mousedown", state._botMenuOff, true), 0);
   }
 
   // ----- party menu -----
@@ -694,6 +789,7 @@
     return st.groups.find((g) => String(g.partyId) === String(state.selectedParty.partyId)) || null;
   }
   function renderPartyView(main) {
+    closeBotMenu();   // drop any stale per-bot menu from a previous view
     const { serverId, partyId } = state.selectedParty;
     const sessions = state.sessions.filter(
       (s) => s.serverId === serverId && String(partyIdOf(s)) === String(partyId));

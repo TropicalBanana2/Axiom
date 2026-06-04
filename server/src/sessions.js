@@ -475,6 +475,16 @@ function handleJsonFrame(ws, raw, authTimer) {
       break;
     }
 
+    case "gotoPoint": {
+      // { op:"gotoPoint", sid, args:{ x, y } } — relocate the bot to a
+      // world point (used by "bring other sessions here").
+      const bot = bots.get(frame.sid);
+      if (!bot || bot._userId !== ws.userId) return;
+      const a = frame.args || {};
+      if (a.x != null && a.y != null && bot.gotoPoint) bot.gotoPoint(+a.x, +a.y);
+      break;
+    }
+
     case "setFlag": {
       const { serverId, flag, value } = frame.args || {};
       if (!serverId || !flag) return;
