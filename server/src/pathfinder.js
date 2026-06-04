@@ -42,105 +42,88 @@ const PLAYER_RADIUS = 28;
 const tileOf = (v) => Math.floor(v / TILE);
 const keyOf = (tx, ty) => tx + "," + ty;
 
+// True if a world point is inside the search window (+ a little slack so
+// an obstacle just outside still blocks the tiles at the edge).
+function inWindow(win, px, py, slack = 200) {
+  return px >= win.minX - slack && px <= win.maxX + slack &&
+         py >= win.minY - slack && py <= win.maxY + slack;
+}
+
+// Add every tile covered by a circle of `radius` (plus body clearance) to
+// `set`. Used for trees / stones / players — round obstacles in the open.
+function markCircle(set, cx, cy, radius) {
+  const r = radius + INFLATE_OBSTACLE;
+  const minTx = tileOf(cx - r), maxTx = tileOf(cx + r);
+  const minTy = tileOf(cy - r), maxTy = tileOf(cy + r);
+  for (let tx = minTx; tx <= maxTx; tx++)
+    for (let ty = minTy; ty <= maxTy; ty++)
+      set.add(keyOf(tx, ty));
+}
+
+// Add the tiles under a building footprint to `set`. `pad` > 0 inflates
+// (solid obstacle); `pad` < 0 insets (a passable door/trap, kept strictly
+// inside its own footprint so it can't claim a neighbour's tile).
+function markFootprint(set, def, px, py, pad) {
+  const hw = def.w / 2, hh = def.h / 2;
+  const minTx = tileOf(px - hw - pad), maxTx = tileOf(px + hw + pad);
+  const minTy = tileOf(py - hh - pad), maxTy = tileOf(py + hh + pad);
+  for (let tx = minTx; tx <= maxTx; tx++)
+    for (let ty = minTy; ty <= maxTy; ty++)
+      set.add(keyOf(tx, ty));
+}
+
+// Route one building into either the blocked set (solid) or the passable
+// set (an owned door / slow-trap the game lets us walk through).
+function markBuilding(blocked, passable, type, px, py, owned) {
+  const def = BUILDINGS[type];
+  if (!def) return;
+  if (isWalkable(type, owned)) markFootprint(passable, def, px, py, -1);
+  else markFootprint(blocked, def, px, py, INFLATE_BUILDING);
+}
+
 // Build the set of blocked tiles within a world-coordinate window.
 // `bot` must expose .entities (Map uid->{targetTick}) and .buildings
 // (Map uid->{...}) for door-ownership. Returns a Set of "tx,ty".
 function buildObstacles(bot, win) {
   const blocked = new Set();
   // Tiles explicitly cleared because a walkable building (owned Door /
-  // SlowTrap) sits there. Applied in a SECOND pass so a neighbouring
-  // wall's inflation can't seal a door gap shut. Without this, two
-  // walls flanking a 48-unit door each bleed INFLATE into the door
-  // tile and the bot can never path out of its own base.
+  // SlowTrap) sits there. Carved back open in a SECOND pass so a
+  // neighbouring wall's inflation can't seal a door gap shut — otherwise
+  // two walls flanking a 48-unit door each bleed into the door tile and
+  // the bot can never path out of its own base.
   const passable = new Set();
 
-  const mark = (cx, cy, radius) => {
-    // Inflate by the bot's body so the path keeps clearance.
-    const r = radius + INFLATE_OBSTACLE;
-    const minTx = tileOf(cx - r), maxTx = tileOf(cx + r);
-    const minTy = tileOf(cy - r), maxTy = tileOf(cy + r);
-    for (let tx = minTx; tx <= maxTx; tx++) {
-      for (let ty = minTy; ty <= maxTy; ty++) {
-        blocked.add(keyOf(tx, ty));
-      }
-    }
-  };
-
+  // Pass 1 — live entities: trees, stones, other players, enemy/seen
+  // buildings (door ownership decided per-uid against our base set).
   for (const [uid, e] of bot.entities) {
     const t = e.targetTick;
-    if (!t || !t.position || t.dead) continue;
-    const m = t.model;
-    if (!m) continue;
+    if (!t || !t.position || t.dead || !t.model) continue;
     const px = t.position.x, py = t.position.y;
-    // Skip anything outside the search window (+ a little slack).
-    if (px < win.minX - 200 || px > win.maxX + 200 ||
-        py < win.minY - 200 || py > win.maxY + 200) continue;
-
-    if (m === "Tree")  { mark(px, py, TREE_RADIUS);  continue; }
-    if (m === "Stone") { mark(px, py, STONE_RADIUS); continue; }
-    if (m === "GamePlayer") {
-      if (uid === bot.uid) continue;                 // never block on self
-      mark(px, py, PLAYER_RADIUS);
-      continue;
-    }
-    const def = BUILDINGS[m];
-    if (def) {
-      // Door walkable only if WE own it (in our party's LocalBuilding set).
-      const owned = bot.buildings && bot.buildings.has(uid);
-      if (isWalkable(m, owned)) {
-        // Record the building's footprint tiles as guaranteed-passable.
-        // No inflation — the gap is exactly the door, and the game lets
-        // us walk straight through our own doors / slow-traps.
-        const hw = def.w / 2, hh = def.h / 2;
-        const minTx = tileOf(px - hw + 1), maxTx = tileOf(px + hw - 1);
-        const minTy = tileOf(py - hh + 1), maxTy = tileOf(py + hh - 1);
-        for (let tx = minTx; tx <= maxTx; tx++)
-          for (let ty = minTy; ty <= maxTy; ty++)
-            passable.add(keyOf(tx, ty));
-        continue;
-      }
-      // Box obstacle — mark tiles under the footprint (inflated).
-      const halfW = def.w / 2, halfH = def.h / 2;
-      const r = INFLATE_BUILDING;
-      const minTx = tileOf(px - halfW - r), maxTx = tileOf(px + halfW + r);
-      const minTy = tileOf(py - halfH - r), maxTy = tileOf(py + halfH + r);
-      for (let tx = minTx; tx <= maxTx; tx++)
-        for (let ty = minTy; ty <= maxTy; ty++)
-          blocked.add(keyOf(tx, ty));
+    if (!inWindow(win, px, py)) continue;
+    switch (t.model) {
+      case "Tree":  markCircle(blocked, px, py, TREE_RADIUS);  break;
+      case "Stone": markCircle(blocked, px, py, STONE_RADIUS); break;
+      case "GamePlayer":
+        if (uid !== bot.uid) markCircle(blocked, px, py, PLAYER_RADIUS);
+        break;
+      default:
+        markBuilding(blocked, passable, t.model, px, py,
+          !!(bot.buildings && bot.buildings.has(uid)));
     }
   }
-  // Own-base pass — bot.buildings is the authoritative party base from
-  // LocalBuilding (always present, unlike entity-update coverage which
-  // can lag). Mark its solid buildings + collect its doors/traps as
-  // passable. Everything here is owned by definition.
+
+  // Pass 2 — own base: bot.buildings is the authoritative party base from
+  // LocalBuilding (always present, unlike entity coverage which can lag).
+  // Everything here is owned by definition.
   if (bot.buildings) {
     for (const b of bot.buildings.values()) {
-      if (b.dead) continue;
-      const def = BUILDINGS[b.type];
-      if (!def) continue;
-      const px = b.x, py = b.y;
-      if (px < win.minX - 200 || px > win.maxX + 200 ||
-          py < win.minY - 200 || py > win.maxY + 200) continue;
-      if (isWalkable(b.type, true)) {   // owned Door / SlowTrap
-        const hw = def.w / 2, hh = def.h / 2;
-        const minTx = tileOf(px - hw + 1), maxTx = tileOf(px + hw - 1);
-        const minTy = tileOf(py - hh + 1), maxTy = tileOf(py + hh - 1);
-        for (let tx = minTx; tx <= maxTx; tx++)
-          for (let ty = minTy; ty <= maxTy; ty++)
-            passable.add(keyOf(tx, ty));
-      } else {
-        const hw = def.w / 2, hh = def.h / 2, r = INFLATE_BUILDING;
-        const minTx = tileOf(px - hw - r), maxTx = tileOf(px + hw + r);
-        const minTy = tileOf(py - hh - r), maxTy = tileOf(py + hh + r);
-        for (let tx = minTx; tx <= maxTx; tx++)
-          for (let ty = minTy; ty <= maxTy; ty++)
-            blocked.add(keyOf(tx, ty));
-      }
+      if (b.dead || !inWindow(win, b.x, b.y)) continue;
+      markBuilding(blocked, passable, b.type, b.x, b.y, true);
     }
   }
 
-  // Final pass: carve the passable tiles back open. A door/slowtrap
-  // tile is always walkable even if flanking walls inflated into it.
+  // Final pass: a door/slow-trap tile is always walkable even if a
+  // flanking wall inflated into it.
   for (const k of passable) blocked.delete(k);
   return blocked;
 }

@@ -595,8 +595,8 @@
     if (!pm || !pm.canvas || !pm.canvas.isConnected) return;
     const cv = pm.canvas, ctx = cv.getContext("2d");
     const dpr = window.devicePixelRatio || 1;
-    const W = cv.clientWidth || 600, H = cv.clientHeight || 340;
-    if (cv.width !== (W * dpr) | 0 || cv.height !== (H * dpr) | 0) {
+    const W = cv.clientWidth || 600, H = cv.clientHeight || 460;
+    if (cv.width !== ((W * dpr) | 0) || cv.height !== ((H * dpr) | 0)) {
       cv.width = (W * dpr) | 0; cv.height = (H * dpr) | 0;
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -604,7 +604,7 @@
     pm.hits = [];
 
     const bots = fleetForOpenParty();
-    // Collect every world point we'll draw so we can fit the view.
+    // Collect every world point so we can frame the view around all of it.
     const pts = [];
     for (const b of bots) {
       if (b.pos) pts.push(b.pos);
@@ -613,72 +613,108 @@
       if (b.path) for (const p of b.path) pts.push(p);
     }
     if (pts.length === 0) {
-      ctx.fillStyle = "#555"; ctx.font = "12px ui-monospace, monospace";
-      ctx.textAlign = "center";
+      ctx.fillStyle = "#5a5a63"; ctx.font = "13px ui-monospace, monospace";
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
       ctx.fillText("waiting for live positions…", W / 2, H / 2);
       return;
     }
+
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const p of pts) {
       if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
       if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
     }
-    // Pad + keep a minimum span so a tight cluster isn't hugely zoomed.
-    const PAD = 80, MIN_SPAN = 600;
-    let spanX = Math.max(maxX - minX, MIN_SPAN), spanY = Math.max(maxY - minY, MIN_SPAN);
+    // Frame with a UNIFORM (square) world span centred on everything, so the
+    // base and farm stay correctly placed relative to each other (no
+    // x/y distortion) and the whole party is always in view.
     const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
-    minX = cx - spanX / 2 - PAD; maxX = cx + spanX / 2 + PAD;
-    minY = cy - spanY / 2 - PAD; maxY = cy + spanY / 2 + PAD;
-    const scale = Math.min(W / (maxX - minX), H / (maxY - minY));
-    const offX = (W - (maxX - minX) * scale) / 2;
-    const offY = (H - (maxY - minY) * scale) / 2;
-    const tx = (x) => (x - minX) * scale + offX;
-    const ty = (y) => (y - minY) * scale + offY;
+    const MIN_SPAN = 500;                       // don't over-zoom a tight cluster
+    const span = Math.max(maxX - minX, maxY - minY, MIN_SPAN) * 1.25;  // 25% margin
+    const PADPX = 26;                           // inner pixel padding
+    const usableW = W - PADPX * 2, usableH = H - PADPX * 2;
+    const scale = Math.min(usableW, usableH) / span;
+    const offX = (W - span * scale) / 2, offY = (H - span * scale) / 2;
+    const tx = (x) => (x - (cx - span / 2)) * scale + offX;
+    const ty = (y) => (y - (cy - span / 2)) * scale + offY;
 
-    // Paths first (under everything).
+    // ── Grid background (one line per ~tile, faded) ──
+    ctx.strokeStyle = "rgba(255,255,255,0.04)"; ctx.lineWidth = 1;
+    const GRID = 480;   // world units between grid lines (10 building tiles)
+    const gx0 = Math.ceil((cx - span / 2) / GRID) * GRID;
+    for (let gx = gx0; gx < cx + span / 2; gx += GRID) {
+      const sx = tx(gx); ctx.beginPath(); ctx.moveTo(sx, 0); ctx.lineTo(sx, H); ctx.stroke();
+    }
+    const gy0 = Math.ceil((cy - span / 2) / GRID) * GRID;
+    for (let gy = gy0; gy < cy + span / 2; gy += GRID) {
+      const sy = ty(gy); ctx.beginPath(); ctx.moveTo(0, sy); ctx.lineTo(W, sy); ctx.stroke();
+    }
+
+    // ── Paths (under markers) ──
     for (const b of bots) {
       if (!b.path || b.path.length < 2) continue;
-      ctx.strokeStyle = "rgba(125,211,252,0.35)"; ctx.lineWidth = 1.5;
+      ctx.strokeStyle = "rgba(125,211,252,0.30)"; ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
       ctx.beginPath(); ctx.moveTo(tx(b.path[0].x), ty(b.path[0].y));
       for (const p of b.path) ctx.lineTo(tx(p.x), ty(p.y));
-      ctx.stroke();
+      ctx.stroke(); ctx.setLineDash([]);
     }
-    // Base markers (◆) — dedupe identical points so a shared base
-    // doesn't overdraw.
+
+    const labelPt = (x, y, text, color) => {
+      ctx.fillStyle = color; ctx.font = "600 10px ui-monospace, monospace";
+      ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+      ctx.fillText(text, x, y - 12);
+    };
+
+    // ── Base markers (◆ + "BASE") ──
     const drawnBase = new Set();
     for (const b of bots) {
       if (!b.base) continue;
-      const key = b.base.x + "," + b.base.y;
+      const key = (b.base.x | 0) + "," + (b.base.y | 0);
       if (drawnBase.has(key)) continue; drawnBase.add(key);
       const x = tx(b.base.x), y = ty(b.base.y);
-      ctx.fillStyle = "#fcd34d";
-      ctx.beginPath(); ctx.moveTo(x, y - 6); ctx.lineTo(x + 6, y); ctx.lineTo(x, y + 6); ctx.lineTo(x - 6, y); ctx.closePath();
-      ctx.fill();
+      ctx.fillStyle = "#fcd34d"; ctx.strokeStyle = "rgba(0,0,0,0.5)"; ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(x, y - 8); ctx.lineTo(x + 8, y); ctx.lineTo(x, y + 8); ctx.lineTo(x - 8, y); ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      labelPt(x, y, "BASE", "#fcd34d");
     }
-    // Farm markers (✛).
+    // ── Farm markers (✛ + "FARM") ──
     const drawnFarm = new Set();
     for (const b of bots) {
       if (!b.farmSpot) continue;
-      const key = b.farmSpot.x + "," + b.farmSpot.y;
+      const key = (b.farmSpot.x | 0) + "," + (b.farmSpot.y | 0);
       if (drawnFarm.has(key)) continue; drawnFarm.add(key);
       const x = tx(b.farmSpot.x), y = ty(b.farmSpot.y);
-      ctx.strokeStyle = "#4ade80"; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(x - 6, y); ctx.lineTo(x + 6, y); ctx.moveTo(x, y - 6); ctx.lineTo(x, y + 6); ctx.stroke();
+      ctx.strokeStyle = "#4ade80"; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.moveTo(x - 7, y); ctx.lineTo(x + 7, y); ctx.moveTo(x, y - 7); ctx.lineTo(x, y + 7); ctx.stroke();
+      ctx.lineWidth = 1; ctx.strokeStyle = "rgba(74,222,128,0.4)";
+      ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI * 2); ctx.stroke();
+      labelPt(x, y, "FARM", "#4ade80");
     }
-    // Bots on top.
+    // ── Bots on top ──
     for (const b of bots) {
       if (!b.pos) continue;
       const x = tx(b.pos.x), y = ty(b.pos.y);
       const moving = b.navStatus === "to-farm" || b.navStatus === "returning";
-      const farming = b.navStatus === "farming";
-      const color = b.dead ? "#f87171" : farming ? "#4ade80" : moving ? "#7dd3fc" : "#9ca3af";
-      ctx.fillStyle = color;
-      ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = "rgba(0,0,0,0.6)"; ctx.lineWidth = 1; ctx.stroke();
-      // Label above.
-      ctx.fillStyle = "#e5e7eb"; ctx.font = "11px ui-monospace, monospace"; ctx.textAlign = "center";
-      ctx.fillText(b.label || ("#" + b.id), x, y - 9);
-      pm.hits.push({ x, y, r: 9, id: b.id });
+      const farming = b.navStatus === "farming" || b.navStatus === "farm-hold" || b.navStatus === "farm-hold-night";
+      const color = b.dead ? "#f87171" : farming ? "#4ade80" : moving ? "#7dd3fc" : "#cbd5e1";
+      ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2);
+      ctx.fillStyle = color; ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = "#0c0c0e"; ctx.stroke();
+      ctx.fillStyle = "#f1f5f9"; ctx.font = "600 11px ui-monospace, monospace";
+      ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+      ctx.fillText(b.label || ("#" + b.id), x, y - 11);
+      pm.hits.push({ x, y, r: 10, id: b.id });
+    }
+
+    // ── Legend (bottom-left) ──
+    ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.font = "10px ui-monospace, monospace";
+    const leg = [["#4ade80", "farming"], ["#7dd3fc", "moving"], ["#cbd5e1", "idle"], ["#f87171", "dead"]];
+    let lx = 10; const ly = H - 12;
+    for (const [c, t] of leg) {
+      ctx.fillStyle = c; ctx.beginPath(); ctx.arc(lx + 4, ly, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#8a8a93"; ctx.fillText(t, lx + 12, ly + 1);
+      lx += 14 + ctx.measureText(t).width + 12;
     }
   }
   function handleFleetMapClick(e) {
@@ -823,9 +859,9 @@
     const mapCard = el("div", { class: "ax-card" },
       el("div", { class: "ax-card-title" }, "party map"),
       el("div", { class: "ax-card-hint" },
-        "Live overhead view. ◆ base · ✛ farm · ● bot (green=farming, blue=moving, grey=idle). Click a bot to open or focus its tab."));
+        "Live overhead view, auto-centred on the whole party. ◆ base · ✛ farm · ● bot. Click a bot for actions (open / auto-farm / bring others)."));
     const mapCanvas = el("canvas", {
-      style: "width:100%;height:340px;display:block;border-radius:8px;background:#0c0c0e;border:1px solid var(--border);margin-top:8px;cursor:pointer",
+      style: "width:100%;height:460px;display:block;border-radius:8px;background:#0c0c0e;border:1px solid var(--border);margin-top:8px;cursor:pointer",
     });
     mapCard.appendChild(mapCanvas);
     main.appendChild(mapCard);

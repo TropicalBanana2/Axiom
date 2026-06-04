@@ -927,15 +927,15 @@ class Bot extends EventEmitter {
       if (desiredIsFarm) {
         if (!this.navArrived) {
           this.navArrived = true;
-          this.sendInput({ up: 0, down: 0, left: 0, right: 0 });
+          this.stopMoving();
           this.sendRpc("EquipItem", { itemName: "PetMiner", tier: 1 });
         }
         this.navStatus = "farming";
-        this.sendInput({ mouseDown: farm.angle });
+        this.attackAngle(farm.angle);
         this.navPath = null;
       } else {
         this.navArrived = false;
-        this.sendInput({ up: 0, down: 0, left: 0, right: 0, mouseUp: 1 });
+        this.stopMoving(true);   // release keys + mouse
         this.navPath = null;
         this.navStatus = "home";
         if (this.navReturning && this.navIntent === "idle") this.navReturning = false;
@@ -956,13 +956,13 @@ class Bot extends EventEmitter {
       // (per user spec) instead of standing idle — the farm spot is a safe
       // location, so we may as well keep gathering until we can leave.
       if (atFarm && farm) {
-        this.sendInput({ mouseDown: farm.angle });
+        this.attackAngle(farm.angle);
         this.navPath = null;
         this.navStatus = this.isNight() ? "farm-hold-night" : "farm-hold";
         return;
       }
       // Otherwise (waiting at base to head out) just wait.
-      this.sendInput({ up: 0, down: 0, left: 0, right: 0, mouseUp: 1 });
+      this.stopMoving(true);
       this.navPath = null;
       this.navStatus = this.isNight() ? "hold-night" : "hold-transition";
       return;
@@ -977,7 +977,7 @@ class Bot extends EventEmitter {
       this._navLastTarget = { x: desired.x, y: desired.y };
       if (!path || path.length === 0) {
         this.navStatus = "nopath";
-        this.sendInput({ up: 0, down: 0, left: 0, right: 0 });
+        this.stopMoving();
         this.navPath = null;
         return;
       }
@@ -991,7 +991,7 @@ class Bot extends EventEmitter {
       const endDist = Math.hypot(end.x - desired.x, end.y - desired.y);
       if (endDist > ARRIVE * 2) {
         this.navStatus = "nopath";
-        this.sendInput({ up: 0, down: 0, left: 0, right: 0 });
+        this.stopMoving();
         this.navPath = null;
         return;
       }
@@ -1001,16 +1001,11 @@ class Bot extends EventEmitter {
 
     // ── Follow the current waypoint ──
     let wp = this.navPath[this.navIndex];
-    let d = Math.hypot(wp.x - me.x, wp.y - me.y);
-    while (d <= WP_REACH && this.navIndex < this.navPath.length - 1) {
-      this.navIndex++;
-      wp = this.navPath[this.navIndex];
-      d = Math.hypot(wp.x - me.x, wp.y - me.y);
+    while (this.distanceTo(wp.x, wp.y) <= WP_REACH && this.navIndex < this.navPath.length - 1) {
+      wp = this.navPath[++this.navIndex];
     }
     this.navStatus = desiredIsFarm ? "to-farm" : "returning";
-    const angleDeg = (Math.atan2(wp.y - me.y, wp.x - me.x) * 180 / Math.PI + 450) % 360;
-    const snap = (Math.round(angleDeg / 45) * 45) % 360;
-    this._sendMoveDir(snap);
+    this.moveToward(wp.x, wp.y);
   }
 
   // True if the nav target moved far enough to warrant an early replan.
@@ -1339,6 +1334,70 @@ class Bot extends EventEmitter {
       right: (angle === 45  || angle === 90  || angle === 135) ? 1 : 0,
       left:  (angle === 225 || angle === 270 || angle === 315) ? 1 : 0,
     });
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Movement API — small, composable primitives so new behaviours can
+  // be built without hand-rolling input packets or geometry. All angles
+  // are degrees in the 0 = up (north), clockwise frame that _sendMoveDir
+  // expects. Every method is a no-op-safe one-shot (call it each tick).
+  // ──────────────────────────────────────────────────────────────────
+
+  // Current world position, or null if not in-world yet.
+  position() { return (this.myPlayer && this.myPlayer.position) || null; }
+
+  // Straight-line distance from the bot to a world point (Infinity if
+  // the bot isn't in-world).
+  distanceTo(x, y) {
+    const p = this.position();
+    return p ? Math.hypot(x - p.x, y - p.y) : Infinity;
+  }
+
+  // True when within `tol` units of the point.
+  atPoint(x, y, tol = 60) { return this.distanceTo(x, y) <= tol; }
+
+  // Bearing from the bot to a world point (0 = up, clockwise degrees).
+  angleTo(x, y) {
+    const p = this.position();
+    if (!p) return 0;
+    return (Math.atan2(y - p.y, x - p.x) * 180 / Math.PI + 450) % 360;
+  }
+
+  // Walk one tick toward a compass direction (snapped to the 8-dir halo).
+  moveAngle(deg) {
+    const a = ((deg % 360) + 360) % 360;
+    this._sendMoveDir((Math.round(a / 45) * 45) % 360);
+  }
+
+  // Walk one tick toward a world point. Returns the remaining distance so
+  // callers can stop on arrival: `if (bot.moveToward(x,y) < 40) bot.stopMoving()`.
+  moveToward(x, y) {
+    this.moveAngle(this.angleTo(x, y));
+    return this.distanceTo(x, y);
+  }
+
+  // Release the movement keys (and optionally the mouse button). Cheap to
+  // call every tick — the engine ignores a no-change input.
+  stopMoving(releaseMouse = false) {
+    const input = { up: 0, down: 0, left: 0, right: 0 };
+    if (releaseMouse) input.mouseUp = 1;
+    this.sendInput(input);
+  }
+
+  // Hold the attack/use button aimed at a compass angle (mining, shooting).
+  attackAngle(deg) { this.sendInput({ mouseDown: ((deg % 360) + 360) % 360 }); }
+  // Hold attack aimed at a world point.
+  attackToward(x, y) { this.attackAngle(this.angleTo(x, y)); }
+  // Release the attack/use button.
+  releaseAttack() { this.sendInput({ mouseUp: 1 }); }
+
+  // Compute a path of world waypoints from the bot to a point (or null if
+  // unreachable / not in-world). Thin wrapper over the windowed A* so
+  // behaviours don't have to import the pathfinder themselves.
+  pathTo(x, y) {
+    const p = this.position();
+    if (!p) return null;
+    return findPath(this, { x: p.x, y: p.y }, { x, y });
   }
 
   // Only sends the release packet if we were actually moving — avoids
