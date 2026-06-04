@@ -965,11 +965,12 @@ class Bot extends EventEmitter {
     // ── Already at the desired location → act ──
     if (distDesired <= ARRIVE) {
       if (desiredIsFarm) {
-        // Precise settle: ARRIVE (60) is loose, so fine-position right onto
-        // the exact spot before farming — and if collision (another bot /
-        // a resource) knocks the bot off mid-farm, walk back. Hysteresis:
-        // settle within FARM_TOL, only re-correct once pushed past FARM_DRIFT.
-        const FARM_TOL = 18, FARM_DRIFT = 34;
+        // Settle onto the spot, then LOCK. The band must be wide enough
+        // that one 8-direction movement step can't overshoot it (a narrow
+        // band made the bot jitter in and out forever, never locking).
+        // Once locked it only re-corrects if genuinely shoved far off —
+        // and the alternating swing means the exact spot isn't critical.
+        const FARM_TOL = 42, FARM_DRIFT = 95;
         if (this.navArrived && distDesired > FARM_DRIFT) this.navArrived = false;
         if (!this.navArrived) {
           if (distDesired > FARM_TOL) {
