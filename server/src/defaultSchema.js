@@ -15,33 +15,43 @@ const SCRIPTS = {
   scr_autoaim: scr("scr_autoaim", "Auto Aim",
     `const on = !!value;
 ctx.storage.set('axiom.autoaim.on', on);
-if (on && !ctx.storage.get('axiom.autoaim.hook')) {
-  const game = ctx.game.game; if (!game?.network?.addPacketHandler) return;
-  ctx.storage.set('axiom.autoaim.hook', true);
-  const measureDist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-  game.network.addPacketHandler(0, () => {
-    if (!ctx.storage.get('axiom.autoaim.on')) return;
-    const mode = ctx.ui.getValue('combat-autoaim-mode') || 'player';
-    const attachments = game.renderer?.npcs?.attachments;
-    const myPos = game.ui?.playerTick?.position;
-    if (!attachments || !myPos) return;
-    const myPid = game.ui.playerPartyId;
-    const myUid = game.world.myUid;
-    const targets = [];
-    for (const e of attachments) {
-      const t = e.fromTick; if (!t) continue;
-      let take = false;
-      if (mode === 'player') take = t.model === 'GamePlayer' && e.targetTick.partyId !== myPid && t.dead == 0;
-      else if (mode === 'zombie') take = t.model !== 'NeutralTier1' && t.entityClass === 'Npc';
-      else if (mode === 'zomdem') take = t.entityClass === 'Npc';
-      else take = t.uid !== myUid;
-      if (take) targets.push(t);
-    }
-    if (!targets.length) return;
-    targets.sort((a, b) => measureDist(myPos, a.position) - measureDist(myPos, b.position));
-    const screen = game.renderer.worldToScreen(targets[0].position.x, targets[0].position.y);
-    game.inputManager.onMouseMoved({ clientX: screen.x, clientY: screen.y });
-  });
+const game = ctx.game.game;
+if (on) {
+  if (!game?.network?.addPacketHandler) { ctx.toast('Auto Aim: attach first'); return; }
+  // Install-guard lives on the live game object, NOT ctx.storage —
+  // game.network is recreated on every page load, so a persisted flag
+  // would wrongly say "already hooked" and the handler would be missing.
+  const H = (game.__axiomHooks = game.__axiomHooks || {});
+  if (!H.autoaim) {
+    H.autoaim = true;
+    const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+    game.network.addPacketHandler(0, () => {
+      if (!ctx.storage.get('axiom.autoaim.on')) return;
+      const mode = ctx.ui.getValue('combat-autoaim-mode') || 'player';
+      const myPos = game.ui && game.ui.playerTick && game.ui.playerTick.position;
+      const ents = game.world && game.world.entities;
+      const renderer = game.world && game.world.renderer;
+      if (!myPos || !ents || !renderer) return;
+      const myPid = game.ui.playerPartyId;
+      const myUid = game.world.myUid;
+      // Same entity source autotrap/ahrc use: game.world.entities + targetTick.
+      let best = null, bestD = Infinity;
+      for (const e of ents.values()) {
+        const t = e.targetTick; if (!t || !t.position) continue;
+        let take = false;
+        if (mode === 'player')      take = t.model === 'GamePlayer' && t.partyId !== myPid && !t.dead;
+        else if (mode === 'zombie') take = t.entityClass === 'Npc' && t.model !== 'NeutralTier1';
+        else if (mode === 'zomdem') take = t.entityClass === 'Npc';
+        else                        take = t.uid !== myUid && !t.dead;
+        if (!take) continue;
+        const d = dist(myPos, t.position);
+        if (d < bestD) { bestD = d; best = t; }
+      }
+      if (!best) return;
+      const screen = renderer.worldToScreen(best.position.x, best.position.y);
+      game.inputManager.onMouseMoved({ clientX: screen.x, clientY: screen.y });
+    });
+  }
 }
 ctx.toast(on ? 'Auto Aim on' : 'Auto Aim off');`),
 
@@ -49,23 +59,28 @@ ctx.toast(on ? 'Auto Aim on' : 'Auto Aim off');`),
   scr_autoheal: scr("scr_autoheal", "Auto Heal",
     `const on = !!value;
 ctx.storage.set('axiom.autoheal.on', on);
-if (on && !ctx.storage.get('axiom.autoheal.hook')) {
-  const game = ctx.game.game; if (!game?.ui?._events?.playerTickUpdate) return;
-  ctx.storage.set('axiom.autoheal.hook', true);
-  let lastHp = 100, equipped = false;
-  game.ui._events.playerTickUpdate.push((player) => {
-    if (!ctx.storage.get('axiom.autoheal.on')) return;
-    if (!game.ui.inventory?.HealthPotion && player.gold >= 100) {
-      game.network.sendRpc({ name: 'BuyItem', itemName: 'HealthPotion', tier: 1 });
-    }
-    const pct = (player.health / player.maxHealth) * 100;
-    equipped = (lastHp <= pct);
-    const thr = ctx.ui.getValue('combat-heal-threshold') || 30;
-    if (pct <= thr && !equipped) {
-      game.network.sendRpc({ name: 'EquipItem', itemName: 'HealthPotion', tier: 1 });
-    }
-    lastHp = pct;
-  });
+const game = ctx.game.game;
+if (on) {
+  if (!game?.network?.addPacketHandler) { ctx.toast('Auto Heal: attach first'); return; }
+  const H = (game.__axiomHooks = game.__axiomHooks || {});
+  if (!H.autoheal) {
+    H.autoheal = true;
+    let lastEquipAt = 0;
+    game.network.addPacketHandler(0, () => {
+      if (!ctx.storage.get('axiom.autoheal.on')) return;
+      const p = game.ui && game.ui.playerTick; if (!p || !p.maxHealth) return;
+      if (!(game.ui.inventory && game.ui.inventory.HealthPotion) && (p.gold || 0) >= 100) {
+        game.network.sendRpc({ name: 'BuyItem', itemName: 'HealthPotion', tier: 1 });
+      }
+      const pct = (p.health / p.maxHealth) * 100;
+      const thr = ctx.ui.getValue('combat-heal-threshold') || 30;
+      const now = Date.now();
+      if (pct <= thr && now - lastEquipAt > 400) {
+        game.network.sendRpc({ name: 'EquipItem', itemName: 'HealthPotion', tier: 1 });
+        lastEquipAt = now;
+      }
+    });
+  }
 }
 ctx.toast(on ? 'Auto Heal armed' : 'Auto Heal disarmed');`),
 
@@ -73,14 +88,18 @@ ctx.toast(on ? 'Auto Heal armed' : 'Auto Heal disarmed');`),
   scr_autorespawn: scr("scr_autorespawn", "Auto Respawn",
     `const on = !!value;
 ctx.storage.set('axiom.autorespawn.on', on);
-if (on && !ctx.storage.get('axiom.autorespawn.hook')) {
-  const game = ctx.game.game; if (!game?.network?.addRpcHandler) return;
-  ctx.storage.set('axiom.autorespawn.hook', true);
-  game.network.addRpcHandler('Dead', () => {
-    if (!ctx.storage.get('axiom.autorespawn.on')) return;
-    const btn = document.querySelector('#hud-respawn > div > div > div > button:nth-child(3)');
-    if (btn) btn.click();
-  });
+const game = ctx.game.game;
+if (on) {
+  if (!game?.network?.addRpcHandler) { ctx.toast('Auto Respawn: attach first'); return; }
+  const H = (game.__axiomHooks = game.__axiomHooks || {});
+  if (!H.autorespawn) {
+    H.autorespawn = true;
+    game.network.addRpcHandler('Dead', () => {
+      if (!ctx.storage.get('axiom.autorespawn.on')) return;
+      const btn = document.querySelector('#hud-respawn > div > div > div > button:nth-child(3)');
+      if (btn) btn.click();
+    });
+  }
 }
 ctx.toast(on ? 'Auto Respawn on' : 'off');`),
 
@@ -89,18 +108,22 @@ ctx.toast(on ? 'Auto Respawn on' : 'off');`),
     `const on = !!value;
 ctx.storage.set('axiom.autobow.on', on);
 const game = ctx.game.game;
-if (on && game?.ui?.inventory?.Bow) {
-  game.network.sendRpc({ name: 'EquipItem', itemName: 'Bow', tier: game.ui.inventory.Bow.tier });
-} else if (on && (game?.ui?.playerTick?.gold || 0) > 100) {
-  game.network.sendRpc({ name: 'BuyItem', itemName: 'Bow', tier: 1 });
-}
-if (on && !ctx.storage.get('axiom.autobow.hook')) {
-  ctx.storage.set('axiom.autobow.hook', true);
-  game.network.addPacketHandler(0, () => {
-    if (!ctx.storage.get('axiom.autobow.on')) return;
-    game.network.sendInput({ space: 0 });
-    game.network.sendInput({ space: 1 });
-  });
+if (on) {
+  if (!game?.network?.addPacketHandler) { ctx.toast('Auto Bow: attach first'); return; }
+  if (game.ui && game.ui.inventory && game.ui.inventory.Bow) {
+    game.network.sendRpc({ name: 'EquipItem', itemName: 'Bow', tier: game.ui.inventory.Bow.tier });
+  } else if ((game.ui && game.ui.playerTick && game.ui.playerTick.gold || 0) > 100) {
+    game.network.sendRpc({ name: 'BuyItem', itemName: 'Bow', tier: 1 });
+  }
+  const H = (game.__axiomHooks = game.__axiomHooks || {});
+  if (!H.autobow) {
+    H.autobow = true;
+    game.network.addPacketHandler(0, () => {
+      if (!ctx.storage.get('axiom.autobow.on')) return;
+      game.network.sendInput({ space: 0 });
+      game.network.sendInput({ space: 1 });
+    });
+  }
 }
 ctx.toast(on ? 'Auto Bow on' : 'off');`),
 
@@ -146,10 +169,12 @@ ctx.toast(fixed ? 'Chat Spam on (your text)' : 'Chat Spam on (random pool)');`),
 // mode: rc = refill+collect · r = refill only · c = collect only
 const on = !!value;
 ctx.storage.set('axiom.ahrc.on', on);
-if (on && !ctx.storage.get('axiom.ahrc.hook')) {
+if (on) {
   const game = ctx.game.game;
   if (!game?.network?.addPacketHandler) { ctx.toast('AHRC: attach first'); return; }
-  ctx.storage.set('axiom.ahrc.hook', true);
+  const H = (game.__axiomHooks = game.__axiomHooks || {});
+  if (!H.ahrc) {
+  H.ahrc = true;
   const seeded  = new Set();   // harvesters we've kicked off with a seed deposit
   const working = new Set();   // harvesters confirmed producing
   game.network.addPacketHandler(0, () => {
@@ -182,6 +207,7 @@ if (on && !ctx.storage.get('axiom.ahrc.hook')) {
       if (mode !== 'r') game.network.sendRpc({ name: 'CollectHarvester', uid });
     }
   });
+  }
 }
 ctx.toast(on ? 'AHRC ' + (ctx.ui.getValue('build-ahrc-mode')||'rc') : 'AHRC off');`),
 
@@ -203,10 +229,12 @@ ctx.toast(\`upgrading \${n} buildings\`);`),
 // below the threshold, then sends UpgradeBuilding to repair-by-upgrading.
 const on = !!value;
 ctx.storage.set('axiom.aulht.on', on);
-if (on && !ctx.storage.get('axiom.aulht.hook')) {
+if (on) {
   const game = ctx.game.game;
   if (!game?.network?.addPacketHandler) { ctx.toast('AULHT: attach first'); return; }
-  ctx.storage.set('axiom.aulht.hook', true);
+  const H = (game.__axiomHooks = game.__axiomHooks || {});
+  if (!H.aulht) {
+  H.aulht = true;
   let cooldown = new Map();
   game.network.addPacketHandler(0, () => {
     if (!ctx.storage.get('axiom.aulht.on')) return;
@@ -223,6 +251,7 @@ if (on && !ctx.storage.get('axiom.aulht.hook')) {
       cooldown.set(b.uid, now + 500);  // don't spam
     }
   });
+  }
 }
 ctx.toast(on ? 'AULHT armed' : 'AULHT off');`),
 
@@ -235,9 +264,11 @@ ctx.toast(on ? 'AULHT armed' : 'AULHT off');`),
 const on = !!value;
 ctx.storage.set('axiom.autobuild.on', on);
 const game = ctx.game.game;
-if (on && !ctx.storage.get('axiom.autobuild.hook')) {
+if (on) {
   if (!game?.network?.addRpcHandler) { ctx.toast('Auto Build: attach first'); return; }
-  ctx.storage.set('axiom.autobuild.hook', true);
+  const H = (game.__axiomHooks = game.__axiomHooks || {});
+  if (!H.autobuild) {
+  H.autobuild = true;
   let layout = JSON.parse(localStorage.getItem('axiom.autobuild.layout') || 'null');
   let lastStashUid = null;
   game.network.addRpcHandler('LocalBuilding', (data) => {
@@ -265,7 +296,8 @@ if (on && !ctx.storage.get('axiom.autobuild.hook')) {
       }
     }
   });
-} else if (!on) {
+  }
+} else {
   localStorage.removeItem('axiom.autobuild.layout');
 }
 ctx.toast(on ? 'Auto Build armed' : 'Auto Build off (layout cleared)');`),
@@ -294,10 +326,12 @@ ctx.toast(\`placed \${placed} walls\`);`),
 // the midpoint between us and them. Cooldown 2 s to avoid spam.
 const on = !!value;
 ctx.storage.set('axiom.autotrap.on', on);
-if (on && !ctx.storage.get('axiom.autotrap.hook')) {
+if (on) {
   const game = ctx.game.game;
   if (!game?.network?.addPacketHandler) { ctx.toast('Auto Trap: attach first'); return; }
-  ctx.storage.set('axiom.autotrap.hook', true);
+  const H = (game.__axiomHooks = game.__axiomHooks || {});
+  if (!H.autotrap) {
+  H.autotrap = true;
   let nextTrapAt = 0;
   game.network.addPacketHandler(0, () => {
     if (!ctx.storage.get('axiom.autotrap.on')) return;
@@ -318,6 +352,7 @@ if (on && !ctx.storage.get('axiom.autotrap.hook')) {
     game.network.sendRpc({ name: 'MakeBuilding', type: 'SlowTrap', x: mx, y: my, yaw: 0 });
     nextTrapAt = Date.now() + 2000;
   });
+  }
 }
 ctx.toast(on ? 'Auto Trap armed' : 'Auto Trap off');`),
 
@@ -328,10 +363,12 @@ ctx.toast(on ? 'Auto Trap armed' : 'Auto Trap off');`),
 // each snapshot entry.
 const on = !!value;
 ctx.storage.set('axiom.rebuild.on', on);
-if (on && !ctx.storage.get('axiom.rebuild.hook')) {
+if (on) {
   const game = ctx.game.game;
   if (!game?.network?.addRpcHandler) { ctx.toast('Rebuilder: attach first'); return; }
-  ctx.storage.set('axiom.rebuild.hook', true);
+  const H = (game.__axiomHooks = game.__axiomHooks || {});
+  if (!H.rebuild) {
+  H.rebuild = true;
   let snapshot = [];     // [{dx, dy, type, tier}]
   let lastStash = null;
   game.network.addRpcHandler('LocalBuilding', (data) => {
@@ -358,11 +395,12 @@ if (on && !ctx.storage.get('axiom.rebuild.hook')) {
       }
     }
   });
+  }
 }
 ctx.toast(on ? 'Rebuilder armed' : 'Rebuilder off');`),
 
   // ── Visuals ──
-  // All visual scripts use PIXI.Graphics attached to game.renderer.ground.
+  // All visual scripts use PIXI.Graphics attached to game.world.renderer.ground.
   // They keep their PIXI objects in a global window.__axiomVis cache
   // keyed by feature+uid so toggling off can clean up cleanly without
   // tracking refs across script invocations.
@@ -375,16 +413,17 @@ window.__axiomVis = window.__axiomVis || {};
 const cache = window.__axiomVis.aoe = window.__axiomVis.aoe || new Map();
 const clear = () => {
   for (const g of cache.values()) {
-    try { game.renderer.ground.removeAttachment(g); } catch {}
+    try { game.world.renderer.ground.removeAttachment(g); } catch {}
   }
   cache.clear();
 };
 if (!on) { clear(); ctx.toast('AOE map off'); return; }
-if (!game?.renderer?.ground || !window.PIXI) { ctx.toast('AOE map: attach first'); return; }
+if (!game?.world?.renderer?.ground || !window.PIXI) { ctx.toast('AOE map: attach first'); return; }
 // Tower-name → AOE radius (zombs.io tower ranges, tier 1 baseline).
 const RANGES = { Cannon: 360, Bomber: 280, Magic: 420, Slowdown: 300, Arrow: 380, Mortar: 600, Sniper: 700 };
-if (!ctx.storage.get('axiom.aoeMap.hook')) {
-  ctx.storage.set('axiom.aoeMap.hook', true);
+const H = (game.__axiomHooks = game.__axiomHooks || {});
+if (!H.aoeMap) {
+  H.aoeMap = true;
   game.network.addPacketHandler(0, () => {
     if (!ctx.storage.get('axiom.aoeMap.on')) return;
     for (const e of game.world.entities.values()) {
@@ -401,13 +440,13 @@ if (!ctx.storage.get('axiom.aoeMap.hook')) {
       g.beginFill(0xffffff, 0.05); g.drawCircle(0, 0, r); g.endFill();
       g.position.set(t.position.x, t.position.y);
       cache.set(e.uid, g);
-      try { game.renderer.ground.addAttachment(g); } catch {}
+      try { game.world.renderer.ground.addAttachment(g); } catch {}
     }
     // Remove circles whose entity is gone.
     for (const uid of [...cache.keys()]) {
       if (!game.world.entities.has(uid)) {
         const g = cache.get(uid);
-        try { game.renderer.ground.removeAttachment(g); } catch {}
+        try { game.world.renderer.ground.removeAttachment(g); } catch {}
         cache.delete(uid);
       }
     }
@@ -426,13 +465,14 @@ window.__axiomVis = window.__axiomVis || {};
 const cache = window.__axiomVis.stash = window.__axiomVis.stash || new Map();
 const clear = () => {
   for (const arr of cache.values())
-    for (const g of arr) { try { game.renderer.ground.removeAttachment(g); } catch {} }
+    for (const g of arr) { try { game.world.renderer.ground.removeAttachment(g); } catch {} }
   cache.clear();
 };
 if (!on) { clear(); ctx.toast('Stash indicators off'); return; }
-if (!game?.renderer?.ground || !window.PIXI) { ctx.toast('Stash indicators: attach first'); return; }
-if (!ctx.storage.get('axiom.stashInd.hook')) {
-  ctx.storage.set('axiom.stashInd.hook', true);
+if (!game?.world?.renderer?.ground || !window.PIXI) { ctx.toast('Stash indicators: attach first'); return; }
+const H = (game.__axiomHooks = game.__axiomHooks || {});
+if (!H.stashInd) {
+  H.stashInd = true;
   game.network.addPacketHandler(0, () => {
     if (!ctx.storage.get('axiom.stashInd.on')) return;
     for (const e of game.world.entities.values()) {
@@ -449,13 +489,13 @@ if (!ctx.storage.get('axiom.stashInd.hook')) {
         g.drawCircle(0, 0, r);
         g.position.set(t.position.x, t.position.y);
         arr.push(g);
-        try { game.renderer.ground.addAttachment(g); } catch {}
+        try { game.world.renderer.ground.addAttachment(g); } catch {}
       }
       cache.set(e.uid, arr);
     }
     for (const uid of [...cache.keys()]) {
       if (!game.world.entities.has(uid)) {
-        for (const g of cache.get(uid)) { try { game.renderer.ground.removeAttachment(g); } catch {} }
+        for (const g of cache.get(uid)) { try { game.world.renderer.ground.removeAttachment(g); } catch {} }
         cache.delete(uid);
       }
     }
@@ -473,13 +513,14 @@ const game = ctx.game.game;
 window.__axiomVis = window.__axiomVis || {};
 const cache = window.__axiomVis.obs = window.__axiomVis.obs || new Map();
 const clear = () => {
-  for (const g of cache.values()) { try { game.renderer.ground.removeAttachment(g); } catch {} }
+  for (const g of cache.values()) { try { game.world.renderer.ground.removeAttachment(g); } catch {} }
   cache.clear();
 };
 if (!on) { clear(); ctx.toast('Obstacle indicators off'); return; }
-if (!game?.renderer?.ground || !window.PIXI) { ctx.toast('Obstacle indicators: attach first'); return; }
-if (!ctx.storage.get('axiom.obs.hook')) {
-  ctx.storage.set('axiom.obs.hook', true);
+if (!game?.world?.renderer?.ground || !window.PIXI) { ctx.toast('Obstacle indicators: attach first'); return; }
+const H = (game.__axiomHooks = game.__axiomHooks || {});
+if (!H.obs) {
+  H.obs = true;
   game.network.addPacketHandler(0, () => {
     if (!ctx.storage.get('axiom.obs.on')) return;
     for (const e of game.world.entities.values()) {
@@ -501,12 +542,12 @@ if (!ctx.storage.get('axiom.obs.hook')) {
       g.drawRect(-w/2, -h/2, w, h); g.endFill();
       g.position.set(cx, cy);
       cache.set(e.uid, g);
-      try { game.renderer.ground.addAttachment(g); } catch {}
+      try { game.world.renderer.ground.addAttachment(g); } catch {}
     }
     for (const uid of [...cache.keys()]) {
       if (!game.world.entities.has(uid)) {
         const g = cache.get(uid);
-        try { game.renderer.ground.removeAttachment(g); } catch {}
+        try { game.world.renderer.ground.removeAttachment(g); } catch {}
         cache.delete(uid);
       }
     }
@@ -523,13 +564,14 @@ const game = ctx.game.game;
 window.__axiomVis = window.__axiomVis || {};
 const cache = window.__axiomVis.blife = window.__axiomVis.blife || new Map();
 const clear = () => {
-  for (const txt of cache.values()) { try { game.renderer.ground.removeAttachment(txt); } catch {} }
+  for (const txt of cache.values()) { try { game.world.renderer.ground.removeAttachment(txt); } catch {} }
   cache.clear();
 };
 if (!on) { clear(); ctx.toast('Building lifetime off'); return; }
-if (!game?.renderer?.ground || !window.PIXI) { ctx.toast('Building lifetime: attach first'); return; }
-if (!ctx.storage.get('axiom.blife.hook')) {
-  ctx.storage.set('axiom.blife.hook', true);
+if (!game?.world?.renderer?.ground || !window.PIXI) { ctx.toast('Building lifetime: attach first'); return; }
+const H = (game.__axiomHooks = game.__axiomHooks || {});
+if (!H.blife) {
+  H.blife = true;
   game.network.addPacketHandler(0, () => {
     if (!ctx.storage.get('axiom.blife.on')) return;
     const myPid = game.ui.playerPartyId;
@@ -554,12 +596,12 @@ if (!ctx.storage.get('axiom.blife.hook')) {
       txt.anchor.set(0.5, 0.5);
       txt.position.set(t.position.x, t.position.y - 40);
       cache.set(e.uid, txt);
-      try { game.renderer.ground.addAttachment(txt); } catch {}
+      try { game.world.renderer.ground.addAttachment(txt); } catch {}
     }
     for (const uid of [...cache.keys()]) {
       if (!game.world.entities.has(uid)) {
         const txt = cache.get(uid);
-        try { game.renderer.ground.removeAttachment(txt); } catch {}
+        try { game.world.renderer.ground.removeAttachment(txt); } catch {}
         cache.delete(uid);
       }
     }
@@ -576,11 +618,11 @@ const game = ctx.game.game;
 window.__axiomVis = window.__axiomVis || {};
 const slot = window.__axiomVis.grid = window.__axiomVis.grid || { graphic: null, handler: null };
 const tearDown = () => {
-  if (slot.graphic) { try { game.renderer.ground.removeAttachment(slot.graphic); } catch {} slot.graphic = null; }
+  if (slot.graphic) { try { game.world.renderer.ground.removeAttachment(slot.graphic); } catch {} slot.graphic = null; }
   if (slot.handler) { document.removeEventListener('mousemove', slot.handler); slot.handler = null; }
 };
 if (!on) { tearDown(); ctx.toast('Grouping grid off'); return; }
-if (!game?.renderer?.ground || !window.PIXI) { ctx.toast('Grouping grid: attach first'); return; }
+if (!game?.world?.renderer?.ground || !window.PIXI) { ctx.toast('Grouping grid: attach first'); return; }
 tearDown();
 const g = new window.PIXI.Graphics();
 g.lineStyle(1, 0xffffff, 0.35);
@@ -590,10 +632,10 @@ for (let i = -cells; i <= cells; i++) {
   g.moveTo(-cells * 24, i * 24); g.lineTo(cells * 24, i * 24);
 }
 slot.graphic = g;
-try { game.renderer.ground.addAttachment(g); } catch {}
+try { game.world.renderer.ground.addAttachment(g); } catch {}
 slot.handler = (e) => {
-  if (!game.renderer.screenToWorld) return;
-  const w = game.renderer.screenToWorld(e.clientX, e.clientY);
+  if (!game.world.renderer.screenToWorld) return;
+  const w = game.world.renderer.screenToWorld(e.clientX, e.clientY);
   const sx = Math.round(w.x / 24) * 24;
   const sy = Math.round(w.y / 24) * 24;
   g.position.set(sx, sy);
@@ -606,10 +648,12 @@ ctx.toast('Grouping grid on');`),
 // flashes a toast + plays a beep the first time one spawns each wave.
 const on = !!value;
 ctx.storage.set('axiom.bossAlert.on', on);
-if (on && !ctx.storage.get('axiom.bossAlert.hook')) {
+if (on) {
   const game = ctx.game.game;
   if (!game?.network?.addPacketHandler) { ctx.toast('Boss Alert: attach first'); return; }
-  ctx.storage.set('axiom.bossAlert.hook', true);
+  const H = (game.__axiomHooks = game.__axiomHooks || {});
+  if (!H.bossAlert) {
+  H.bossAlert = true;
   const seen = new Set();
   let lastWave = -1;
   game.network.addPacketHandler(0, () => {
@@ -631,6 +675,7 @@ if (on && !ctx.storage.get('axiom.bossAlert.hook')) {
       } catch {}
     }
   });
+  }
 }
 ctx.toast(on ? 'Boss Alert armed' : 'off');`),
   scr_optimizers: scr("scr_optimizers", "Optimizers",
@@ -638,12 +683,12 @@ ctx.toast(on ? 'Boss Alert armed' : 'off');`),
 const on = !!value;
 ctx.storage.set('axiom.optimize.on', on);
 const game = ctx.game.game;
-if (game?.renderer) {
+if (game?.world?.renderer) {
   try {
-    if (game.renderer.particles && game.renderer.particles.setVisible)
-      game.renderer.particles.setVisible(!on);
-    if (game.renderer.attachments && game.renderer.attachments.setVisible)
-      game.renderer.attachments.setVisible(!on);
+    if (game.world.renderer.particles && game.world.renderer.particles.setVisible)
+      game.world.renderer.particles.setVisible(!on);
+    if (game.world.renderer.attachments && game.world.renderer.attachments.setVisible)
+      game.world.renderer.attachments.setVisible(!on);
   } catch {}
 }
 ctx.toast(on ? 'optimizers on (particles+attachments off)' : 'optimizers off');`),
@@ -664,8 +709,9 @@ if (!on) {
   ctx.toast('Movement Copy off'); return;
 }
 if (!game?.network?.addPacketHandler) { ctx.toast('Movement Copy: attach first'); return; }
-if (!ctx.storage.get('axiom.moveCopy.hook')) {
-  ctx.storage.set('axiom.moveCopy.hook', true);
+const H = (game.__axiomHooks = game.__axiomHooks || {});
+if (!H.moveCopy) {
+  H.moveCopy = true;
   let lastPos = null, lastTick = 0;
   const lastKeys = { up: 0, down: 0, left: 0, right: 0 };
   game.network.addPacketHandler(0, () => {
@@ -864,15 +910,25 @@ if (controlId === 'multi-clones-spawn') {
   // ── Party ──
   scr_autoGiveSell: scr("scr_autoGiveSell", "Auto Give Sell",
     `if (!value) return;
-const parties = Object.values(ctx.game.game?.ui?.parties || {});
-for (const p of parties) {
-  for (const m of (p.members || [])) {
-    try {
-      ctx.game.game.network.sendRpc({ name: 'SetPartyMemberCanSell', uid: m.playerUid, canSell: 1 });
-    } catch {}
-  }
+const game = ctx.game.game;
+// Party members come from game.ui.getPlayerPartyMembers() — the same
+// accessor the client's own party UI uses. Each member has .playerUid
+// and .canSell (1 = already allowed). There is no game.ui.parties[].members.
+const members = (game && game.ui && game.ui.getPlayerPartyMembers)
+  ? (game.ui.getPlayerPartyMembers() || []) : null;
+if (!members) { ctx.toast('Give Sell: attach to a session first'); return; }
+const myUid = game.world && game.world.myUid;
+let n = 0;
+for (const m of members) {
+  if (!m || m.playerUid === myUid) continue;   // skip self
+  if (m.canSell === 1) continue;               // already granted
+  try {
+    game.network.sendRpc({ name: 'SetPartyMemberCanSell', uid: m.playerUid, canSell: 1 });
+    n++;
+  } catch {}
 }
-ctx.toast('granted sell perms to all party members');`),
+ctx.toast(n ? ('granted sell perms to ' + n + ' member' + (n === 1 ? '' : 's'))
+            : 'no members needed granting (or party empty)');`),
 
   // ── Base Saver ──
   // One script dispatches every BaseSaver action via controlId so all
@@ -881,7 +937,7 @@ ctx.toast('granted sell perms to all party members');`),
   // axiom.baseSaver.data; pins at axiom.baseSaver.pins.
   //
   // Overlay preview uses PIXI.Graphics rectangles attached to
-  // game.renderer.ground — left-click anywhere on the HUD to commit
+  // game.world.renderer.ground — left-click anywhere on the HUD to commit
   // the ghosted layout via MakeBuilding RPCs; right-click cancels.
   // Prebuilt "Plus Base" — a fixed layout placed relative to the
   // GoldStash. Offsets are ADDED to the stash position (gs.x + dx),
@@ -981,13 +1037,13 @@ const COLORS = {
   MagicTower: 0xcc88ff, GoldMine: 0xffdd44, Harvester: 0x66ccff,
 };
 const quantize = () => {
-  const w = game.renderer.screenToWorld(S.mouse.x, S.mouse.y);
+  const w = game.world.renderer.screenToWorld(S.mouse.x, S.mouse.y);
   return { x: Math.round(w.x / TILE) * TILE, y: Math.round(w.y / TILE) * TILE };
 };
 const stopOverlay = () => {
   if (!S.overlay) return;
   for (const gh of S.overlay.ghosts) {
-    try { game.renderer.ground.removeAttachment(gh.g); } catch {}
+    try { game.world.renderer.ground.removeAttachment(gh.g); } catch {}
   }
   removeEventListener('mousedown',  S.overlay.onClick);
   removeEventListener('mousemove',  S.overlay.onMove);
@@ -996,7 +1052,7 @@ const stopOverlay = () => {
 };
 const startOverlay = (id) => {
   if (!S.data[id]) return;
-  if (!game.renderer?.ground || !window.PIXI) { ctx.toast('Preview: attach first'); return; }
+  if (!game.world?.renderer?.ground || !window.PIXI) { ctx.toast('Preview: attach first'); return; }
   stopOverlay();
   const towers = S.data[id].baseString.split(';')
     .filter(s => s)
@@ -1011,7 +1067,7 @@ const startOverlay = (id) => {
     g.drawRect(-TILE/2, -TILE/2, TILE, TILE);
     g.endFill();
     ghosts.push({ g, dx: -t.dx, dy: -t.dy, model: t.model, yaw: t.yaw });
-    try { game.renderer.ground.addAttachment(g); } catch {}
+    try { game.world.renderer.ground.addAttachment(g); } catch {}
   }
   S.overlay = {
     ghosts,
@@ -1159,7 +1215,7 @@ else if (controlId === 'bs-unpin') {
 };
 
 const DEFAULT_SCHEMA = {
-  schemaVersion: 12,
+  schemaVersion: 13,
   meta: {
     name: "Axiom",
     version: "0.1.0",

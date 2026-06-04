@@ -47,7 +47,10 @@ const DEFENSE_TYPES = new Set([
 // the moment economy couldn't afford its next upgrade.)
 function classOf(type, tier, ecoMin, restMax, aheadBy) {
   if (ECONOMY_TYPES.has(type)) return 0;
-  const restCap = ecoMin - aheadBy;     // rest may not exceed this tier
+  // Once the economy is fully maxed there's nothing left to stay ahead
+  // of — lift the cap so defense/structures climb all the way to max
+  // tier instead of stalling at (MAX_TIER - aheadBy).
+  const restCap = (ecoMin >= MAX_TIER) ? MAX_TIER : (ecoMin - aheadBy);
   if (tier + 1 > restCap) return 99;    // upgrading would break the gap
   return DEFENSE_TYPES.has(type) ? 1 : 2;
 }

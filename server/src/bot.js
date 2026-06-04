@@ -147,13 +147,17 @@ class Bot extends EventEmitter {
     this.navPath = null; this.navIndex = 0; this.navArrived = false;
   }
 
-  // The base anchor the bot returns to = the session's STARTING position,
-  // captured at the first entity tick after enter-world (see
-  // _onEntityUpdate). We intentionally do NOT fall back to the GoldStash:
-  // that made bots walk to the stash (a different spot) and looked like
-  // "going to random places". If navHome somehow isn't captured yet,
-  // return null and the bot simply won't path home until it is.
+  // The base anchor the bot returns to = the party's GoldStash. That is
+  // the one true, shared base — every bot in the party returns to the
+  // same place. We deliberately do NOT use each bot's raw spawn point:
+  // alts joining a party spawn scattered across the map, so anchoring to
+  // spawn made them "go to random places" on the way back. The captured
+  // spawn position (navHome) is only a fallback until the stash is known.
   _homePoint() {
+    const gs = this.gs;
+    if (gs && Number.isFinite(gs.x) && Number.isFinite(gs.y)) {
+      return { x: gs.x, y: gs.y };
+    }
     return this.navHome || null;
   }
 
@@ -164,10 +168,10 @@ class Bot extends EventEmitter {
     if (on) {
       this.navIntent = "farm";
       this.navReturning = false;
-      // Capture the base home position the first time we leave — but
-      // only if we're NOT already standing at the farm spot (otherwise
-      // home == farm and the bot would never "return"). When skipped,
-      // _homePoint() falls back to the GoldStash.
+      // Capture a fallback spawn position the first time we leave — only
+      // used by _homePoint() until the party's GoldStash is known. Skip it
+      // if we're already standing at the farm spot (otherwise the fallback
+      // home == farm and the bot would never "return").
       if (!this.navHome && this.myPlayer && this.myPlayer.position) {
         const p = this.myPlayer.position;
         const nearFarm = this.farmSpot &&
@@ -897,6 +901,20 @@ class Bot extends EventEmitter {
       this.navReplanTick = this.tick + 30;   // ~1.5 s between replans
       this._navLastTarget = { x: desired.x, y: desired.y };
       if (!path || path.length === 0) {
+        this.navStatus = "nopath";
+        this.sendInput({ up: 0, down: 0, left: 0, right: 0 });
+        this.navPath = null;
+        return;
+      }
+      // Destination check: only commit to a path that actually ENDS at the
+      // place we want (farm or base). A pathfinder can return a truncated
+      // path that stops short when the target is blocked — following it
+      // blindly would march the bot to a random spot and abandon it there.
+      // If the endpoint isn't near `desired`, refuse it and hold position
+      // instead of drifting somewhere wrong.
+      const end = path[path.length - 1];
+      const endDist = Math.hypot(end.x - desired.x, end.y - desired.y);
+      if (endDist > ARRIVE * 2) {
         this.navStatus = "nopath";
         this.sendInput({ up: 0, down: 0, left: 0, right: 0 });
         this.navPath = null;

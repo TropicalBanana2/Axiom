@@ -150,7 +150,18 @@ app.get("/play", (_req, res) =>
   res.sendFile(path.join(__dirname, "..", "public", "client.html"))
 );
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`[axiom-localhost] listening on :${PORT}`);
   console.log(`  visit  http://localhost:${PORT}`);
+});
+server.on("error", (err) => {
+  if (err && err.code === "EADDRINUSE") {
+    console.error(
+      `[axiom-localhost] port ${PORT} is already in use — another axiom-localhost ` +
+      `instance is probably running (or set AXIOM_HTTP_PORT to a free port). ` +
+      `Not starting a duplicate.`);
+    process.exit(0);
+  }
+  console.error(`[axiom-localhost] server error:`, err);
+  process.exit(1);
 });

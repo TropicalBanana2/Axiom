@@ -25,7 +25,18 @@ const gc = runInNewContext("gc");
 
 const PORT = parseInt(process.env.AXIOM_SOCKETS_PORT || "8100", 10);
 const wss = new WebSocket.Server({ port: PORT, maxPayload: 65536 });
-console.log(`[axiom-sockets] listening on :${PORT}`);
+wss.on("listening", () => console.log(`[axiom-sockets] listening on :${PORT}`));
+wss.on("error", (err) => {
+  if (err && err.code === "EADDRINUSE") {
+    console.error(
+      `[axiom-sockets] port ${PORT} is already in use — another axiom-sockets ` +
+      `instance is probably running. Not starting a duplicate. ` +
+      `Run "pm2 delete axiom-sockets" (or kill the stray node process) and start once.`);
+    process.exit(0);   // clean exit so pm2 doesn't crash-loop / spam stack traces
+  }
+  console.error(`[axiom-sockets] server error:`, err);
+  process.exit(1);
+});
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();

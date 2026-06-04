@@ -43,7 +43,18 @@ const {
 const PORT = parseInt(process.env.AXIOM_SESSIONS_PORT || "8090", 10);
 
 const wss = new WebSocket.Server({ port: PORT, maxPayload: 65536 });
-console.log(`[axiom-sessions] listening on :${PORT}`);
+wss.on("listening", () => console.log(`[axiom-sessions] listening on :${PORT}`));
+wss.on("error", (err) => {
+  if (err && err.code === "EADDRINUSE") {
+    console.error(
+      `[axiom-sessions] port ${PORT} is already in use — another axiom-sessions ` +
+      `instance is probably running. Not starting a duplicate. ` +
+      `Run "pm2 delete axiom-sessions" (or kill the stray node process) and start once.`);
+    process.exit(0);
+  }
+  console.error(`[axiom-sessions] server error:`, err);
+  process.exit(1);
+});
 
 // In-memory state.
 const bots = new Map();              // axiom sid -> Bot instance
