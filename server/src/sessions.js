@@ -484,6 +484,16 @@ function handleJsonFrame(ws, raw, authTimer) {
       break;
     }
 
+    case "setControl": {
+      // { op:"setControl", sid, args:{ taken } } — when taken, the bot
+      // stops all its own inputs so the human at /play drives the session.
+      const bot = bots.get(frame.sid);
+      if (!bot || bot._userId !== ws.userId) return;
+      bot._userControlling = !!(frame.args && frame.args.taken);
+      send(ws, { op: "control", sid: bot.id, data: { taken: bot._userControlling } });
+      break;
+    }
+
     case "gotoPoint": {
       // { op:"gotoPoint", sid, args:{ x, y } } — relocate the bot to a
       // world point (used by "bring other sessions here").

@@ -960,30 +960,27 @@ const nearest = (wx, wy, model) => {
   return (best && bestD < 700) ? { x: best.x, y: best.y } : null;
 };
 
-// Predetermined, distinct standing spots — split the bots between the
-// tree and the stone, each standing just outside its resource (no overlap)
-// and aiming straight at it. Bots fan along the OUTER arc (the side facing
-// away from the other resource) so the two groups don't crowd each other.
+// Predetermined, distinct standing spots so EVERY bot can reach BOTH the
+// tree and the stone (not split between them). We ring the bots around the
+// pair's midpoint and aim each one at the centre, so its swing sweeps the
+// whole cluster. The radius is the largest that still keeps both resources
+// in reach from every ring position, but never so small the bots overlap.
 function computeSpots(tree, stone, n) {
-  const RES = [{ p: tree, r: 64 }, { p: stone, r: 48 }];  // tree/stone radii
-  const groups = [[], []];
-  for (let i = 0; i < n; i++) groups[i % 2].push(i);       // round-robin
+  const mx = (tree.x + stone.x) / 2, my = (tree.y + stone.y) / 2;
+  const sep = Math.hypot(tree.x - stone.x, tree.y - stone.y);  // tree↔stone gap
+  const REACH = 150;                          // ~harvest reach from a spot
+  const spacingR = Math.max(34, 9 * n);       // keep adjacent bots ~1 body apart
+  const reachR = Math.max(34, REACH - sep / 2);  // stay in range of the FAR resource
+  // Prefer the spacing radius, but never exceed what keeps both in reach.
+  const R = Math.min(reachR, Math.max(spacingR, 42));
   const spots = new Array(n);
-  for (let r = 0; r < 2; r++) {
-    const c = RES[r].p, other = RES[1 - r].p;
-    const stand = RES[r].r + 30;                            // outside the hitbox, within swing
-    const away = Math.atan2(c.y - other.y, c.x - other.x);  // bearing away from the other resource (rad)
-    const list = groups[r], k = list.length;
-    const ARC = Math.PI * 1.1;                              // ~200° spread on the outer side
-    for (let j = 0; j < k; j++) {
-      const t = (k === 1) ? 0 : (j / (k - 1) - 0.5);        // -0.5 … 0.5
-      const a = away + t * ARC;
-      const sx = Math.round(c.x + Math.cos(a) * stand);
-      const sy = Math.round(c.y + Math.sin(a) * stand);
-      // Aim from the spot back at the resource (game frame: 0 = up, CW).
-      const aim = Math.round((Math.atan2(c.y - sy, c.x - sx) * 180 / Math.PI + 450) % 360);
-      spots[list[j]] = { x: sx, y: sy, angle: aim };
-    }
+  for (let i = 0; i < n; i++) {
+    const a = (2 * Math.PI * i) / n - Math.PI / 2;   // first slot = north
+    const sx = Math.round(mx + Math.cos(a) * R);
+    const sy = Math.round(my + Math.sin(a) * R);
+    // Aim back at the centre so the swing covers both resources.
+    const aim = Math.round((Math.atan2(my - sy, mx - sx) * 180 / Math.PI + 450) % 360);
+    spots[i] = { x: sx, y: sy, angle: aim };
   }
   return spots;
 }

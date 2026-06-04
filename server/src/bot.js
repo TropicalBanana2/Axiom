@@ -481,6 +481,20 @@ class Bot extends EventEmitter {
     const userCount = (typeof this._userAttached === "function")
       ? this._userAttached() : false;
 
+    // "Take Control": while a human is driving this session, the bot stops
+    // sending ALL of its own inputs (nav, autofarm, heal, respawn) so it
+    // never fights the user's movement/aim. On the tick control is taken we
+    // release any held swing/movement once.
+    const controlling = !!this._userControlling;
+    if (controlling) {
+      if (!this._wasControlling && this.myPlayer) {
+        try { this.sendInput({ up: 0, down: 0, left: 0, right: 0, mouseUp: 1 }); } catch {}
+      }
+      this._wasControlling = true;
+      return;   // hand the session entirely to the user
+    }
+    this._wasControlling = false;
+
     if (this.farmReleaseTicks > 0 && this.myPlayer) {
       this.sendInput({ mouseUp: 1 });
       this.farmReleaseTicks--;

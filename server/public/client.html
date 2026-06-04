@@ -379,6 +379,11 @@
             //   }
             game.network.sendPacket = (e, t) => {
               if (e === 4 || e === 5 || e === 6 || e === 7) return;
+              // "Take Control" gate: until the user takes control, drop all
+              // INPUT packets (opcode 3 — movement, aim/yaw, mouse) so the
+              // browser never disturbs the autonomous bot. RPCs (panel
+              // actions) still pass so the in-game tools keep working.
+              if (e === 3 && !window.__axiomControl) return;
               this.sendPacket(e, t);
             };
             game.network.connected = true;
@@ -475,6 +480,33 @@
       const user = new AttachUser(sid, token);
       window.attachUser = user;
       const ws = user.ws;  // alias for the rest of this scope
+
+      // ── "Take Control" button ──────────────────────────────────────
+      // Until pressed, window.__axiomControl is false and the input gate
+      // (see sendPacket above) drops all movement/aim so the bot drives
+      // itself undisturbed. Pressing it tells the bot to stop its own
+      // inputs (setControl) and lets the user's inputs through.
+      window.__axiomControl = false;
+      const ctrlBtn = document.createElement("button");
+      const paint = () => {
+        const on = window.__axiomControl;
+        ctrlBtn.textContent = on ? "● You're driving — release to bot" : "Take Control";
+        ctrlBtn.style.cssText =
+          "position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:99999;" +
+          "padding:8px 16px;border-radius:10px;cursor:pointer;font:600 13px ui-sans-serif,system-ui,sans-serif;" +
+          "backdrop-filter:blur(16px) saturate(160%);-webkit-backdrop-filter:blur(16px) saturate(160%);" +
+          "box-shadow:0 6px 18px rgba(0,0,0,0.45),0 0 0 1px rgba(255,255,255,0.08) inset;" +
+          (on
+            ? "background:linear-gradient(180deg,rgba(74,222,128,0.92),rgba(34,197,94,0.92));color:#04210f;border:1px solid rgba(255,255,255,0.4);"
+            : "background:rgba(20,22,28,0.6);color:#e4e4e7;border:1px solid rgba(255,255,255,0.18);");
+      };
+      ctrlBtn.onclick = () => {
+        window.__axiomControl = !window.__axiomControl;
+        try { user.ws.send(JSON.stringify({ op: "setControl", sid, args: { taken: window.__axiomControl } })); } catch {}
+        paint();
+      };
+      paint();
+      document.body.appendChild(ctrlBtn);
     }
 
     playBtn.onclick = () => {
