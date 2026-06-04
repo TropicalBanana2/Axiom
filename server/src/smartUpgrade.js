@@ -84,6 +84,12 @@ function farmThresholds(ecoMin, restMax) {
 }
 
 const UPGRADE_COOLDOWN_MS = 1800;   // per-building, until LocalBuilding confirms
+// A session must be within this distance of a building to upgrade it
+// (the zombs.io server rejects out-of-range build actions). Generous
+// enough that any bot standing in the base counts as "in range", while a
+// bot out at a distant farm does not — so we know when to send one over.
+const UPGRADE_RANGE = 600;
+const UPGRADE_MOVE_COOLDOWN_MS = 3000;   // re-dispatch throttle for movers
 // Pickaxe: each farming session upgrades its pickaxe toward this tier
 // (faster wood/stone gathering) — only when the math says it's worth it.
 //
@@ -141,6 +147,9 @@ function createCoordinator({ getBots, sendToUser }) {
   // afford the next pending upgrade). Used to debounce saving→farm so it
   // doesn't flip every tick.
   const savingSince = new Map();
+  // bot.id -> last time we dispatched it to an out-of-range building, so
+  // we don't re-issue gotoPoint every tick while it walks over.
+  const lastMoveAt = new Map();
 
   // Buy the next pickaxe tier ONLY when the harvest-gain math says it's
   // worth it (see pickaxeWorthIt). Buys one step at a time toward the
@@ -232,13 +241,13 @@ function createCoordinator({ getBots, sendToUser }) {
   // see the same party base, but updates can lag, so take the highest
   // tier seen for each uid.
   function mergeBuildings(group) {
-    const merged = new Map();   // uid -> {uid, type, tier}
+    const merged = new Map();   // uid -> {uid, type, tier, x, y}
     for (const bot of group) {
       for (const b of bot.buildings.values()) {
         if (b.dead) continue;
         const prev = merged.get(b.uid);
         if (!prev || b.tier > prev.tier) {
-          merged.set(b.uid, { uid: b.uid, type: b.type, tier: b.tier });
+          merged.set(b.uid, { uid: b.uid, type: b.type, tier: b.tier, x: b.x, y: b.y });
         }
       }
     }
@@ -295,15 +304,32 @@ function createCoordinator({ getBots, sendToUser }) {
 
     // Assign to the "smallest sufficient wallet" — the affordable session
     // with the LEAST gold — so richer sessions stay free for pricier
-    // upgrades only they can cover.
+    // upgrades only they can cover. Proximity matters: the server only
+    // accepts the upgrade from a session within UPGRADE_RANGE of the
+    // building, so we prefer an in-range affordable session; if none is in
+    // range we return the nearest affordable one flagged needsMove so the
+    // caller can walk it over.
     for (const cand of candidates) {
-      let best = null;
+      const bx = cand.b.x, by = cand.b.y;
+      const hasPos = Number.isFinite(bx) && Number.isFinite(by);
+      let inBest = null, inBestGold = Infinity;
+      let moveBest = null, moveBestDist = Infinity;
       for (const bot of group) {
         const m = localMats.get(bot.id);
         if (!m || !canAfford(m, cand.cost)) continue;
-        if (!best || m.gold < localMats.get(best.id).gold) best = bot;
+        const p = bot.myPlayer && bot.myPlayer.position;
+        const dist = (hasPos && p) ? Math.hypot(p.x - bx, p.y - by) : 0;
+        if (!hasPos || dist <= UPGRADE_RANGE) {
+          if (m.gold < inBestGold) { inBestGold = m.gold; inBest = bot; }
+        }
+        if (dist < moveBestDist) { moveBestDist = dist; moveBest = bot; }
       }
-      if (best) return { building: cand.b, cost: cand.cost, session: best, isEco: cand.isEco };
+      if (inBest) {
+        return { building: cand.b, cost: cand.cost, session: inBest, isEco: cand.isEco, needsMove: false };
+      }
+      if (moveBest && hasPos) {
+        return { building: cand.b, cost: cand.cost, session: moveBest, isEco: cand.isEco, needsMove: true };
+      }
     }
     return null;
   }
@@ -365,6 +391,22 @@ function createCoordinator({ getBots, sendToUser }) {
         for (const b of workingBuildings) b.tier = tierByUid.get(b.uid);
         const pick = pickUpgrade(workingBuildings, group, cfg.aheadBy, localMats, now);
         if (!pick) break;
+
+        // Out-of-range upgrade: no affordable session is close enough to
+        // this building. Walk the nearest affordable one over to it so the
+        // upgrade can land on a later tick, then stop for this tick (the
+        // building stays pending until a bot is in range).
+        if (pick.needsMove) {
+          const sid = pick.session.id;
+          if (now - (lastMoveAt.get(sid) || 0) > UPGRADE_MOVE_COOLDOWN_MS &&
+              pick.session.gotoPoint) {
+            pick.session.gotoPoint(pick.building.x, pick.building.y);
+            pick.session._upgradeMoveUntil = now + 8000;  // shield from retreat
+            lastMoveAt.set(sid, now);
+            actions.push({ uid: pick.building.uid, type: pick.building.type, by: sid, move: true });
+          }
+          break;
+        }
 
         // Fire the upgrade from the chosen session.
         try { pick.session.sendRpc("UpgradeBuilding", { uid: pick.building.uid }); }
@@ -436,6 +478,9 @@ function createCoordinator({ getBots, sendToUser }) {
 
         for (const bot of group) {
           if (!bot.farmSpot) continue;          // only manage bots with a spot
+          // Don't yank a bot we just dispatched to upgrade an out-of-range
+          // building — let it reach the building and fire first.
+          if (bot._upgradeMoveUntil && now < bot._upgradeMoveUntil) continue;
           const p = bot.myPlayer;
           const wood = p.wood || 0, stone = p.stone || 0;
           if (!bot._coordFarming) {

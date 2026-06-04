@@ -492,9 +492,18 @@
   // it's heading (farm or base). Clicking a label opens — or focuses, if
   // already open — that bot's /play attach tab. Driven by window.__axiomFleet
   // (set from the sessions WS in client.html) + the game's worldToScreen.
+  const _attachWins = {};   // id -> Window handle (this page session)
   function openOrFocusAttach(id) {
     if (id == null) return;
-    try { const w = window.open("/play?attach=" + id, "axiom_attach_" + id); if (w) w.focus(); } catch {}
+    const key = String(id);
+    // Focus an already-open tab instead of reloading it (re-calling
+    // window.open with the same name re-navigates = reload).
+    const existing = _attachWins[key];
+    if (existing && !existing.closed) { try { existing.focus(); return; } catch {} }
+    try {
+      const w = window.open("/play?attach=" + id, "axiom_attach_" + id);
+      if (w) { _attachWins[key] = w; w.focus(); }
+    } catch {}
   }
   function startFleetOverlay() {
     const host = document.createElement("div");

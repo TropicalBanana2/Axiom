@@ -565,10 +565,18 @@
   // already open. The window NAME (axiom_attach_<id>) is the focus key:
   // window.open with an existing name reuses that tab instead of making
   // a new one.
+  const _attachWins = {};   // id -> Window handle (this dashboard session)
   function openOrFocusAttach(id) {
     if (id == null) return;
+    const key = String(id);
+    // If we already hold a live handle to this bot's tab, just focus it —
+    // re-calling window.open(url, name) would RELOAD the existing tab.
+    const existing = _attachWins[key];
+    if (existing && !existing.closed) {
+      try { existing.focus(); return; } catch {}
+    }
     const w = window.open(`/play?attach=${id}`, `axiom_attach_${id}`);
-    if (w) { try { w.focus(); } catch {} }
+    if (w) { _attachWins[key] = w; try { w.focus(); } catch {} }
   }
 
   // ----- party fleet map -----

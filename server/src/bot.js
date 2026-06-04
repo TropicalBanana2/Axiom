@@ -898,7 +898,14 @@ class Bot extends EventEmitter {
     const WP_REACH = 40;      // advance to next waypoint within this distance
 
     const home = this._homePoint();
-    const farm = this.farmSpot;
+    // Farm target = the configured spot PLUS this bot's coordination slot
+    // offset, so multiple party bots fan out around the same tree/stone
+    // instead of stacking on one pixel (see assignFarmSlots). Angle is
+    // preserved so they all still aim at the resource.
+    let farm = this.farmSpot;
+    if (farm && this._farmSlot) {
+      farm = { x: farm.x + this._farmSlot.dx, y: farm.y + this._farmSlot.dy, angle: farm.angle };
+    }
 
     // Desired resting location for the current intent.
     let desired = (this.navIntent === "farm") ? farm : home;
@@ -944,8 +951,17 @@ class Bot extends EventEmitter {
     const safeWindow = this._safeTravelWindow();
 
     if (!safeWindow && !stranded) {
-      // At a safe location but it's not the one we want, and it's a bad
-      // time to cross the map → just wait here until the window opens.
+      // Bad time to cross the map. If we're being recalled but we're still
+      // standing at the farm, KEEP FARMING until the travel window opens
+      // (per user spec) instead of standing idle — the farm spot is a safe
+      // location, so we may as well keep gathering until we can leave.
+      if (atFarm && farm) {
+        this.sendInput({ mouseDown: farm.angle });
+        this.navPath = null;
+        this.navStatus = this.isNight() ? "farm-hold-night" : "farm-hold";
+        return;
+      }
+      // Otherwise (waiting at base to head out) just wait.
       this.sendInput({ up: 0, down: 0, left: 0, right: 0, mouseUp: 1 });
       this.navPath = null;
       this.navStatus = this.isNight() ? "hold-night" : "hold-transition";

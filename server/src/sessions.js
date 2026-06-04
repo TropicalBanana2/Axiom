@@ -531,11 +531,41 @@ setInterval(() => {
   }
 }, 3000);
 
+// Coordinated farm slots — bots whose farm spots land on the same tile
+// fan out into a ring around it so they don't stack on one pixel and all
+// stay in range of the tree+stone. Each bot gets a {dx,dy} offset its
+// nav adds to the farm spot. Recomputed on the fleet cadence so it tracks
+// bots joining/leaving the cluster.
+function assignFarmSlots(allBots) {
+  const groups = new Map();   // userId|party|tileX|tileY -> [bot, ...]
+  for (const bot of allBots) {
+    if (!bot.farmSpot) { bot._farmSlot = null; continue; }
+    const pid = (bot.myPlayer && bot.myPlayer.partyId) || 0;
+    const key = bot._userId + "|" + pid + "|" +
+      Math.round(bot.farmSpot.x / 48) + "|" + Math.round(bot.farmSpot.y / 48);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(bot);
+  }
+  for (const grp of groups.values()) {
+    const n = grp.length;
+    if (n === 1) { grp[0]._farmSlot = { dx: 0, dy: 0 }; continue; }
+    grp.sort((a, b) => a.id - b.id);   // deterministic slot assignment
+    // Ring radius so adjacent bots don't overlap (~2·playerRadius arc
+    // spacing) but stay tight enough to keep both resources in range.
+    const R = Math.min(72, Math.max(36, n * 13));
+    for (let i = 0; i < n; i++) {
+      const ang = (2 * Math.PI * i) / n - Math.PI / 2;   // first slot = north
+      grp[i]._farmSlot = { dx: Math.round(Math.cos(ang) * R), dy: Math.round(Math.sin(ang) * R) };
+    }
+  }
+}
+
 // Fast fleet broadcast — live positions + nav for every in-world bot,
 // fanned out to all of a user's connections (dashboard party map AND each
 // /play tab's overlay). Much lighter than the full session list, so it
 // runs several times a second. Built once per user, then shared.
 setInterval(() => {
+  assignFarmSlots(bots.values());
   const byUser = new Map();   // userId -> [fleetInfo, ...]
   for (const bot of bots.values()) {
     const info = bot.fleetInfo && bot.fleetInfo();
