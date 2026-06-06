@@ -964,33 +964,30 @@ const nearest = (wx, wy, model) => {
 };
 
 // Standing spots so EVERY bot can reach BOTH the tree and the stone.
-// We line the bots up along the PERPENDICULAR BISECTOR of the tree↔stone
-// segment: on that line every bot is exactly equidistant to the tree and
-// the stone, so no bot is ever stranded out of range of one of them (the
-// old ring put a bot behind the far resource → "can't get wood"). Each
-// bot aims back at the midpoint, where both resources sit symmetrically in
-// front. Spacing is capped so even the outermost bot stays in reach.
+// Harvest = press chop aimed at the pair MIDPOINT; the pet auto-targets
+// everything in its hit cone (reach ~96-120), so one aim collects both.
+// A bot therefore has to stand WITHIN reach of both resources, just
+// outside their hitboxes. On the perpendicular bisector a bot at offset o
+// is sqrt((D/2)²+o²) from each resource — keep that in [CLEAR, MAXR].
 function computeSpots(tree, stone, n) {
   const mx = (tree.x + stone.x) / 2, my = (tree.y + stone.y) / 2;
   const ax = stone.x - tree.x, ay = stone.y - tree.y;
   const D = Math.hypot(ax, ay) || 1;             // tree↔stone gap
   const px = -ay / D, py = ax / D;               // unit perpendicular
-  const CLEAR = 80;   // stand at least this far from a resource centre → OUTSIDE its hitbox
-  const REACH = 150;  // ...but within this so the alternating swing still reaches each
-  // Leave a central gap (minO) so no bot stands inside the tree/stone — the
-  // midpoint itself is inside the tree when the pair is close. Then step
-  // bots outward along the perpendicular, alternating sides.
-  const minO = Math.sqrt(Math.max(0, CLEAR * CLEAR - (D / 2) * (D / 2)));
-  const maxO = Math.max(minO, Math.sqrt(Math.max(0, REACH * REACH - (D / 2) * (D / 2))));
+  const CLEAR = 72;   // outside the hitbox
+  const MAXR = 98;    // within chop+pet reach of each resource
+  const half = D / 2;
+  const minO = Math.sqrt(Math.max(0, CLEAR * CLEAR - half * half));
+  const maxO = Math.max(minO + 1, Math.sqrt(Math.max(0, MAXR * MAXR - half * half)));
   const perSide = Math.ceil(n / 2);
-  let step = perSide > 1 ? Math.min(64, (maxO - minO) / (perSide - 1)) : 0;
-  if (perSide > 1 && step < 56) step = 56;       // keep bodies a diameter apart
+  const step = perSide > 1 ? (maxO - minO) / (perSide - 1) : 0;
   const spots = new Array(n);
   for (let i = 0; i < n; i++) {
     const side = (i % 2 === 0) ? 1 : -1;
     const rank = Math.floor(i / 2);
     const o = side * (minO + rank * step);
     const sx = Math.round(mx + px * o), sy = Math.round(my + py * o);
+    // Aim at the midpoint so the chop cone covers both resources.
     const aim = Math.round((Math.atan2(my - sy, mx - sx) * 180 / Math.PI + 450) % 360);
     spots[i] = { x: sx, y: sy, angle: aim };
   }
@@ -1360,7 +1357,7 @@ else if (controlId === 'bs-unpin') {
 };
 
 const DEFAULT_SCHEMA = {
-  schemaVersion: 21,
+  schemaVersion: 22,
   meta: {
     name: "Axiom",
     version: "0.1.0",

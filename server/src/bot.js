@@ -975,15 +975,10 @@ class Bot extends EventEmitter {
         this.sendRpc("EquipItem", { itemName: "PetCARL", tier: 1 });  // never Woody
       }
       this.navStatus = "farming";
-      // Alternate the swing between the tree and stone so the bot hits a
-      // real resource each time and collects BOTH.
-      if (this.farmTargets && this.farmTargets.length > 1) {
-        const idx = Math.floor(this.tick / 14) % this.farmTargets.length;
-        const t = this.farmTargets[idx];
-        this.attackToward(t.x, t.y);
-      } else {
-        this.attackAngle(farm.angle);
-      }
+      // Press chop aimed at the pair midpoint (farm.angle). The pet auto-
+      // targets everything in its hit cone, so BOTH the tree and stone get
+      // hit from one aim — same mechanic the working auto-farm uses.
+      this.attackAngle(farm.angle);
       // Edge onto the exact spot; lock (stop) once close OR once stuck.
       const SETTLE = 36;
       if (!this.navArrived) {

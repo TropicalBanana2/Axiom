@@ -834,12 +834,11 @@
     const ax = stone.x - tree.x, ay = stone.y - tree.y;
     const D = Math.hypot(ax, ay) || 1;
     const px = -ay / D, py = ax / D;
-    const CLEAR = 80, REACH = 150;
-    const minO = Math.sqrt(Math.max(0, CLEAR * CLEAR - (D / 2) * (D / 2)));
-    const maxO = Math.max(minO, Math.sqrt(Math.max(0, REACH * REACH - (D / 2) * (D / 2))));
+    const CLEAR = 72, MAXR = 98, half = D / 2;
+    const minO = Math.sqrt(Math.max(0, CLEAR * CLEAR - half * half));
+    const maxO = Math.max(minO + 1, Math.sqrt(Math.max(0, MAXR * MAXR - half * half)));
     const perSide = Math.ceil(n / 2);
-    let step = perSide > 1 ? Math.min(64, (maxO - minO) / (perSide - 1)) : 0;
-    if (perSide > 1 && step < 56) step = 56;
+    const step = perSide > 1 ? (maxO - minO) / (perSide - 1) : 0;
     const spots = [];
     for (let i = 0; i < n; i++) {
       const side = (i % 2 === 0) ? 1 : -1;
