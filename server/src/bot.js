@@ -968,21 +968,15 @@ class Bot extends EventEmitter {
     // ── Already at the desired location → act ──
     if (distDesired <= ARRIVE) {
       if (desiredIsFarm) {
-        // We're in the farm zone (≤ARRIVE). ALWAYS swing here — and at the
-        // same time keep nudging toward the EXACT spot (you can move and
-        // attack in the same tick). This both fixes "arrived but never
-        // swings" and keeps tightening the position the user asked for.
-        if (!this.navArrived) {
-          this.navArrived = true;
-          // Use PetCARL while farming — never the miner pet ("Woody"),
-          // which wanders off to chop random resources and pulls the
-          // formation apart. The bot harvests via its own swings.
+        // Equip PetCARL once when we begin farming — never the miner pet
+        // ("Woody"), which wanders off chopping. The bot harvests by swinging.
+        if (this.navStatus !== "farming") {
           this.sendRpc("EquipItem", { itemName: "PetCARL", tier: 1 });
         }
         this.navStatus = "farming";
-        // Swing: alternate between the tree and stone (Smart Farm targets)
-        // so the bot hits a real resource each time and collects BOTH,
-        // instead of swinging at the empty midpoint. Else hold the angle.
+        // Always swing — alternate between the tree and stone (Smart Farm
+        // targets) so the bot hits a real resource each time and collects
+        // BOTH, instead of swinging at the empty midpoint. Else hold the angle.
         if (this.farmTargets && this.farmTargets.length > 1) {
           const period = 14;   // ~0.7 s on each resource before switching
           const idx = Math.floor(this.tick / period) % this.farmTargets.length;
@@ -991,11 +985,21 @@ class Bot extends EventEmitter {
         } else {
           this.attackAngle(farm.angle);
         }
-        // Keep creeping onto the exact spot while swinging; hold still once
-        // we're right on it (small deadband so it doesn't jitter).
-        const FINE = 14;
-        if (distDesired > FINE) this.moveToward(desired.x, desired.y);
-        else this.sendInput({ up: 0, down: 0, left: 0, right: 0 });
+        // Close in once, then LOCK and hold completely still — only swing.
+        // (Nudging every tick made the bot creep forever because 8-direction
+        // movement can't sit exactly on a point.) navArrived latches the
+        // lock; the bot only re-approaches if it leaves the arrival zone
+        // entirely, which the outer logic handles.
+        const SETTLE = 40;
+        if (!this.navArrived) {
+          if (distDesired > SETTLE) {
+            this.moveToward(desired.x, desired.y);   // approach (still swinging)
+          } else {
+            this.navArrived = true;
+            this.sendInput({ up: 0, down: 0, left: 0, right: 0 });   // stop, once
+          }
+        }
+        // While locked: send no movement at all → the bot stays put.
         this.navPath = null;
       } else {
         this.navArrived = false;
