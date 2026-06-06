@@ -232,6 +232,9 @@ class Bot extends EventEmitter {
       navActive: !!this.navActive,
       base: home ? { x: home.x | 0, y: home.y | 0 } : null,
       farmSpot: this.farmSpot ? { x: this.farmSpot.x | 0, y: this.farmSpot.y | 0 } : null,
+      // The tree+stone the bot is farming (Smart Farm) — lets the dashboard
+      // save the spot as a per-server preset.
+      farmTargets: this.farmTargets ? this.farmTargets.map((t) => ({ x: t.x | 0, y: t.y | 0 })) : null,
       // Only stream the path while actually moving (keeps payload small).
       path: (this.navActive && this.navPath)
         ? this.navPath.map((w) => ({ x: w.x | 0, y: w.y | 0 }))
@@ -965,32 +968,21 @@ class Bot extends EventEmitter {
     // ── Already at the desired location → act ──
     if (distDesired <= ARRIVE) {
       if (desiredIsFarm) {
-        // Settle onto the spot, then LOCK. The band must be wide enough
-        // that one 8-direction movement step can't overshoot it (a narrow
-        // band made the bot jitter in and out forever, never locking).
-        // Once locked it only re-corrects if genuinely shoved far off —
-        // and the alternating swing means the exact spot isn't critical.
-        const FARM_TOL = 42, FARM_DRIFT = 95;
-        if (this.navArrived && distDesired > FARM_DRIFT) this.navArrived = false;
+        // We're in the farm zone (≤ARRIVE). ALWAYS swing here — and at the
+        // same time keep nudging toward the EXACT spot (you can move and
+        // attack in the same tick). This both fixes "arrived but never
+        // swings" and keeps tightening the position the user asked for.
         if (!this.navArrived) {
-          if (distDesired > FARM_TOL) {
-            this.navStatus = "to-farm";
-            this.navPath = null;
-            this.moveToward(desired.x, desired.y);
-            return;
-          }
           this.navArrived = true;
-          this.stopMoving();
           // Use PetCARL while farming — never the miner pet ("Woody"),
           // which wanders off to chop random resources and pulls the
           // formation apart. The bot harvests via its own swings.
           this.sendRpc("EquipItem", { itemName: "PetCARL", tier: 1 });
         }
         this.navStatus = "farming";
-        // If we have explicit resource targets (Smart Farm: tree + stone),
-        // alternate the swing between them so the bot actually hits a real
-        // resource each time and collects BOTH — rather than swinging at the
-        // empty midpoint. Otherwise hold the single configured angle.
+        // Swing: alternate between the tree and stone (Smart Farm targets)
+        // so the bot hits a real resource each time and collects BOTH,
+        // instead of swinging at the empty midpoint. Else hold the angle.
         if (this.farmTargets && this.farmTargets.length > 1) {
           const period = 14;   // ~0.7 s on each resource before switching
           const idx = Math.floor(this.tick / period) % this.farmTargets.length;
@@ -999,6 +991,11 @@ class Bot extends EventEmitter {
         } else {
           this.attackAngle(farm.angle);
         }
+        // Keep creeping onto the exact spot while swinging; hold still once
+        // we're right on it (small deadband so it doesn't jitter).
+        const FINE = 14;
+        if (distDesired > FINE) this.moveToward(desired.x, desired.y);
+        else this.sendInput({ up: 0, down: 0, left: 0, right: 0 });
         this.navPath = null;
       } else {
         this.navArrived = false;

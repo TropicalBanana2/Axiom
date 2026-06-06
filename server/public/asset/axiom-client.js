@@ -825,6 +825,93 @@
     setTimeout(() => document.addEventListener("mousedown", state._botMenuOff, true), 0);
   }
 
+  // ----- per-server farm presets -----
+  // Mirror of the server's computeSpots (defaultSchema scr_smartFarm): lay
+  // bots on the perpendicular bisector of the tree↔stone segment so each is
+  // equidistant to both, aiming at the midpoint.
+  function computeFarmSpots(tree, stone, n) {
+    const mx = (tree.x + stone.x) / 2, my = (tree.y + stone.y) / 2;
+    const ax = stone.x - tree.x, ay = stone.y - tree.y;
+    const D = Math.hypot(ax, ay) || 1;
+    const px = -ay / D, py = ax / D;
+    const REACH = 120;
+    const maxO = Math.sqrt(Math.max(400, REACH * REACH - (D / 2) * (D / 2)));
+    let spacing = (n > 1) ? Math.min(68, (2 * maxO) / (n - 1)) : 0;
+    spacing = Math.max(spacing, 60);
+    const spots = [];
+    for (let i = 0; i < n; i++) {
+      let o = (i - (n - 1) / 2) * spacing;
+      if (Math.abs(o) < 1) o = spacing * 0.5;
+      const sx = Math.round(mx + px * o), sy = Math.round(my + py * o);
+      const aim = Math.round((Math.atan2(my - sy, mx - sx) * 180 / Math.PI + 450) % 360);
+      spots.push({ x: sx, y: sy, angle: aim });
+    }
+    return spots;
+  }
+  function farmPresets(serverId) {
+    try { return JSON.parse(localStorage.getItem("axiom.farmPresets." + serverId) || "[]"); }
+    catch { return []; }
+  }
+  function saveFarmPresets(serverId, list) {
+    localStorage.setItem("axiom.farmPresets." + serverId, JSON.stringify(list));
+  }
+  // The tree+stone currently being farmed by this party (from the fleet).
+  function currentFarmTargets() {
+    const b = fleetForOpenParty().find((x) => x.farmTargets && x.farmTargets.length > 1);
+    return b ? b.farmTargets : null;
+  }
+  function applyFarmPreset(preset) {
+    const ids = fleetForOpenParty().map((b) => b.id).sort((a, b) => a - b);
+    if (!ids.length) { toast("No party sessions to assign.", "danger"); return; }
+    const tree = preset.targets[0], stone = preset.targets[1];
+    const spots = computeFarmSpots(tree, stone, ids.length);
+    const targets = [{ x: tree.x, y: tree.y }, { x: stone.x, y: stone.y }];
+    ids.forEach((id, idx) => {
+      const s = spots[idx];
+      send({ op: "setFarmSpot", sid: id, args: { x: s.x, y: s.y, angle: s.angle, fixed: true, targets } });
+      send({ op: "setNav", sid: id, args: { on: true, returnToBase: true } });
+    });
+    toast(`Applied "${preset.name}" to ${ids.length} bot${ids.length === 1 ? "" : "s"}.`);
+  }
+  function buildFarmPresetsCard(serverId) {
+    const card = el("div", { class: "ax-card" },
+      el("div", { class: "ax-card-title" }, "farm presets"),
+      el("div", { class: "ax-card-hint" },
+        "Save the active Smart Farm location for this server, then one-click apply it to the whole party."));
+    const list = el("div", {});
+    const refresh = () => {
+      list.innerHTML = "";
+      const presets = farmPresets(serverId);
+      if (!presets.length) {
+        list.appendChild(el("div", { style: "font-size:11px;color:var(--text-dim);padding:6px 0" },
+          "No presets for this server yet — run Smart Farm Setup in-game, then Save."));
+      }
+      presets.forEach((p, i) => {
+        list.appendChild(el("div", { style: "display:flex;align-items:center;gap:8px;padding:5px 0" },
+          el("span", { style: "flex:1;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" }, p.name),
+          el("button", { class: "ax-btn", onclick: () => applyFarmPreset(p) }, "Apply"),
+          el("button", { class: "ax-btn ghost", title: "Delete",
+            onclick: () => { const l = farmPresets(serverId); l.splice(i, 1); saveFarmPresets(serverId, l); refresh(); } }, "✕")));
+      });
+    };
+    const saveBtn = el("button", { class: "ax-btn primary", style: "margin-top:8px" }, "＋ Save current farm");
+    saveBtn.onclick = () => {
+      const targets = currentFarmTargets();
+      if (!targets) { toast("No active Smart Farm — run Smart Farm Setup in-game first.", "danger"); return; }
+      const name = prompt("Preset name:", "Farm " + (farmPresets(serverId).length + 1));
+      if (!name) return;
+      const l = farmPresets(serverId);
+      l.push({ name: name.slice(0, 40), targets: targets.map((t) => ({ x: t.x | 0, y: t.y | 0 })) });
+      saveFarmPresets(serverId, l);
+      refresh();
+      toast(`Saved "${name}".`);
+    };
+    card.appendChild(list);
+    card.appendChild(saveBtn);
+    refresh();
+    return card;
+  }
+
   // ----- party menu -----
   // Finds the live smart-upgrade status group for the selected party.
   function partyStatusGroup() {
@@ -919,6 +1006,9 @@
       el("div", { id: "party-su-status", style: "margin-top:10px;padding-top:10px;border-top:1px solid var(--glass-divider,var(--border))" })
     ));
     updatePartyStatus();
+
+    // Farm presets (per server)
+    main.appendChild(buildFarmPresetsCard(serverId));
 
     // Members card
     const memCard = el("div", { class: "ax-card" }, el("div", { class: "ax-card-title" }, "members"));
