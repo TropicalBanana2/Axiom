@@ -931,7 +931,8 @@ class Bot extends EventEmitter {
   //     in the open.
   _tickNavigate() {
     const me = this.myPlayer.position;
-    const ARRIVE = 60;        // close enough to "arrive"
+    const ARRIVE = 60;        // close enough to "arrive" (home)
+    const FARM_ZONE = 120;    // start farming within this of the spot (forgiving)
     const WP_REACH = 40;      // advance to next waypoint within this distance
 
     const home = this._homePoint();
@@ -965,52 +966,60 @@ class Bot extends EventEmitter {
 
     const distDesired = Math.hypot(desired.x - me.x, desired.y - me.y);
 
-    // ── Already at the desired location → act ──
-    if (distDesired <= ARRIVE) {
-      if (desiredIsFarm) {
-        // Equip PetCARL once when we begin farming — never the miner pet
-        // ("Woody"), which wanders off chopping. The bot harvests by swinging.
-        if (this.navStatus !== "farming") {
-          this.sendRpc("EquipItem", { itemName: "PetCARL", tier: 1 });
-        }
-        this.navStatus = "farming";
-        // Always swing — alternate between the tree and stone (Smart Farm
-        // targets) so the bot hits a real resource each time and collects
-        // BOTH, instead of swinging at the empty midpoint. Else hold the angle.
-        if (this.farmTargets && this.farmTargets.length > 1) {
-          const period = 14;   // ~0.7 s on each resource before switching
-          const idx = Math.floor(this.tick / period) % this.farmTargets.length;
-          const t = this.farmTargets[idx];
-          this.attackToward(t.x, t.y);
+    // ── Farming: forgiving. Swing as soon as we're anywhere near the spot,
+    //    keep edging onto it, but if we get jammed (bots/tree collisions)
+    //    just settle and farm where we are — the alternating swing reaches
+    //    the resources from anywhere in range, so the exact spot isn't vital.
+    if (desiredIsFarm && distDesired <= FARM_ZONE) {
+      if (this.navStatus !== "farming") {
+        this.sendRpc("EquipItem", { itemName: "PetCARL", tier: 1 });  // never Woody
+      }
+      this.navStatus = "farming";
+      // Alternate the swing between the tree and stone so the bot hits a
+      // real resource each time and collects BOTH.
+      if (this.farmTargets && this.farmTargets.length > 1) {
+        const idx = Math.floor(this.tick / 14) % this.farmTargets.length;
+        const t = this.farmTargets[idx];
+        this.attackToward(t.x, t.y);
+      } else {
+        this.attackAngle(farm.angle);
+      }
+      // Edge onto the exact spot; lock (stop) once close OR once stuck.
+      const SETTLE = 36;
+      if (!this.navArrived) {
+        if (distDesired <= SETTLE) {
+          this.navArrived = true; this._farmStuck = 0;
+          this.sendInput({ up: 0, down: 0, left: 0, right: 0 });
         } else {
-          this.attackAngle(farm.angle);
-        }
-        // Close in once, then LOCK and hold completely still — only swing.
-        // (Nudging every tick made the bot creep forever because 8-direction
-        // movement can't sit exactly on a point.) navArrived latches the
-        // lock; the bot only re-approaches if it leaves the arrival zone
-        // entirely, which the outer logic handles.
-        const SETTLE = 40;
-        if (!this.navArrived) {
-          if (distDesired > SETTLE) {
-            this.moveToward(desired.x, desired.y);   // approach (still swinging)
+          // Stuck detector: if approaching makes no headway for ~1.2 s
+          // (jammed against another bot or the resource), settle here.
+          const lp = this._farmApproachPos;
+          const moved = lp ? Math.hypot(me.x - lp.x, me.y - lp.y) : 99;
+          this._farmStuck = (moved < 5) ? (this._farmStuck || 0) + 1 : 0;
+          this._farmApproachPos = { x: me.x, y: me.y };
+          if (this._farmStuck >= 24) {
+            this.navArrived = true; this._farmStuck = 0;
+            this.sendInput({ up: 0, down: 0, left: 0, right: 0 });
           } else {
-            this.navArrived = true;
-            this.sendInput({ up: 0, down: 0, left: 0, right: 0 });   // stop, once
+            this.moveToward(desired.x, desired.y);   // approach while swinging
           }
         }
-        // While locked: send no movement at all → the bot stays put.
-        this.navPath = null;
-      } else {
-        this.navArrived = false;
-        this.stopMoving(true);   // release keys + mouse
-        this.navPath = null;
-        this.navStatus = "home";
-        if (this.navReturning && this.navIntent === "idle") this.navReturning = false;
       }
+      this.navPath = null;
+      return;
+    }
+
+    // ── Home arrival ──
+    if (!desiredIsFarm && distDesired <= ARRIVE) {
+      this.navArrived = false;
+      this.stopMoving(true);   // release keys + mouse
+      this.navPath = null;
+      this.navStatus = "home";
+      if (this.navReturning && this.navIntent === "idle") this.navReturning = false;
       return;
     }
     this.navArrived = false;
+    this._farmStuck = 0;   // fresh approach next time we reach the farm
 
     // ── Not at the desired location → decide whether to travel now ──
     const atHome = home && Math.hypot(home.x - me.x, home.y - me.y) <= ARRIVE;
