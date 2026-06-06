@@ -975,14 +975,21 @@ function computeSpots(tree, stone, n) {
   const ax = stone.x - tree.x, ay = stone.y - tree.y;
   const D = Math.hypot(ax, ay) || 1;             // tree↔stone gap
   const px = -ay / D, py = ax / D;               // unit perpendicular
-  const REACH = 120;                             // ~harvest reach (kept tight so bots stay close to both)
-  const maxO = Math.sqrt(Math.max(400, REACH * REACH - (D / 2) * (D / 2)));
-  let spacing = (n > 1) ? Math.min(68, (2 * maxO) / (n - 1)) : 0;
-  spacing = Math.max(spacing, 60);               // > player diameter so bodies don't shove
+  const CLEAR = 80;   // stand at least this far from a resource centre → OUTSIDE its hitbox
+  const REACH = 150;  // ...but within this so the alternating swing still reaches each
+  // Leave a central gap (minO) so no bot stands inside the tree/stone — the
+  // midpoint itself is inside the tree when the pair is close. Then step
+  // bots outward along the perpendicular, alternating sides.
+  const minO = Math.sqrt(Math.max(0, CLEAR * CLEAR - (D / 2) * (D / 2)));
+  const maxO = Math.max(minO, Math.sqrt(Math.max(0, REACH * REACH - (D / 2) * (D / 2))));
+  const perSide = Math.ceil(n / 2);
+  let step = perSide > 1 ? Math.min(64, (maxO - minO) / (perSide - 1)) : 0;
+  if (perSide > 1 && step < 56) step = 56;       // keep bodies a diameter apart
   const spots = new Array(n);
   for (let i = 0; i < n; i++) {
-    let o = (i - (n - 1) / 2) * spacing;          // centred, both sides of midpoint
-    if (Math.abs(o) < 1) o = spacing * 0.5;       // never sit exactly on the midpoint
+    const side = (i % 2 === 0) ? 1 : -1;
+    const rank = Math.floor(i / 2);
+    const o = side * (minO + rank * step);
     const sx = Math.round(mx + px * o), sy = Math.round(my + py * o);
     const aim = Math.round((Math.atan2(my - sy, mx - sx) * 180 / Math.PI + 450) % 360);
     spots[i] = { x: sx, y: sy, angle: aim };
@@ -1353,7 +1360,7 @@ else if (controlId === 'bs-unpin') {
 };
 
 const DEFAULT_SCHEMA = {
-  schemaVersion: 20,
+  schemaVersion: 21,
   meta: {
     name: "Axiom",
     version: "0.1.0",

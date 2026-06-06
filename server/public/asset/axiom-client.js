@@ -834,14 +834,17 @@
     const ax = stone.x - tree.x, ay = stone.y - tree.y;
     const D = Math.hypot(ax, ay) || 1;
     const px = -ay / D, py = ax / D;
-    const REACH = 120;
-    const maxO = Math.sqrt(Math.max(400, REACH * REACH - (D / 2) * (D / 2)));
-    let spacing = (n > 1) ? Math.min(68, (2 * maxO) / (n - 1)) : 0;
-    spacing = Math.max(spacing, 60);
+    const CLEAR = 80, REACH = 150;
+    const minO = Math.sqrt(Math.max(0, CLEAR * CLEAR - (D / 2) * (D / 2)));
+    const maxO = Math.max(minO, Math.sqrt(Math.max(0, REACH * REACH - (D / 2) * (D / 2))));
+    const perSide = Math.ceil(n / 2);
+    let step = perSide > 1 ? Math.min(64, (maxO - minO) / (perSide - 1)) : 0;
+    if (perSide > 1 && step < 56) step = 56;
     const spots = [];
     for (let i = 0; i < n; i++) {
-      let o = (i - (n - 1) / 2) * spacing;
-      if (Math.abs(o) < 1) o = spacing * 0.5;
+      const side = (i % 2 === 0) ? 1 : -1;
+      const rank = Math.floor(i / 2);
+      const o = side * (minO + rank * step);
       const sx = Math.round(mx + px * o), sy = Math.round(my + py * o);
       const aim = Math.round((Math.atan2(my - sy, mx - sx) * 180 / Math.PI + 450) % 360);
       spots.push({ x: sx, y: sy, angle: aim });
