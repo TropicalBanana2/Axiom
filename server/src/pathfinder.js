@@ -37,7 +37,11 @@ const CLEARANCE_PENALTY = 3;     // extra cost for tiles adjacent to obstacles
 
 const TREE_RADIUS = 64;
 const STONE_RADIUS = 48;
-const PLAYER_RADIUS = 28;
+// A player occupies ~1 tile (24u). Keep this small so a player blocks
+// roughly its own 1×1 cell — over-inflating it (was 28 → ~3 tiles with the
+// obstacle pad) walled off tight base corridors and jammed bots that can't
+// pass through one another.
+const PLAYER_RADIUS = 6;
 
 const tileOf = (v) => Math.floor(v / TILE);
 const keyOf = (tx, ty) => tx + "," + ty;

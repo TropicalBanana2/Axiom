@@ -353,6 +353,30 @@ function createCoordinator({ getBots, sendToUser }) {
     return null;
   }
 
+  // Bring a bot to a building it needs to act on (upgrade/rebuild) when none
+  // is in range. Two cases, both jam-safe:
+  //   • building is inside the base → recall the bot to its OWN base anchor
+  //     (a clear, reachable spot from which the whole base is in range) —
+  //     never navigate it into a cramped building tile where 1×1 bots jam.
+  //   • building is OUTSIDE the base → walk to it, but never cross the map at
+  //     night (zombies); wait for daytime.
+  // Throttled per bot and shielded from the farm-retreat loop.
+  function dispatchToBuilding(bot, bx, by, now) {
+    if (!bot || now - (lastMoveAt.get(bot.id) || 0) <= UPGRADE_MOVE_COOLDOWN_MS) return;
+    const home = bot._homePoint && bot._homePoint();
+    const nearBase = home && Math.hypot(home.x - bx, home.y - by) <= UPGRADE_RANGE;
+    if (nearBase) {
+      bot.returnToBase = true;
+      bot._coordFarming = false;
+      if (bot.setNavActive) bot.setNavActive(false);   // walk to the base anchor
+    } else {
+      if (bot.isNight && bot.isNight()) return;          // don't leave at night
+      if (bot.gotoPoint) bot.gotoPoint(bx, by);
+    }
+    bot._upgradeMoveUntil = now + 8000;
+    lastMoveAt.set(bot.id, now);
+  }
+
   // Auto-rebuild: remember the established base layout per party and, when
   // a building vanishes (destroyed), place a fresh tier-1 in its slot from
   // an affordable in-range bot (or walk the nearest one over). Smart upgrade
@@ -396,10 +420,8 @@ function createCoordinator({ getBots, sendToUser }) {
         try { placer.sendRpc("MakeBuilding", { type: rec.type, x: rec.x, y: rec.y, yaw: 0 }); } catch {}
         lastRebuildAt.set(key, now);
         if (actions) actions.push({ uid: -1, type: rec.type, rebuild: true, by: placer.id });
-      } else if (mover && mover.gotoPoint && now - (lastMoveAt.get(mover.id) || 0) > UPGRADE_MOVE_COOLDOWN_MS) {
-        mover.gotoPoint(rec.x, rec.y);
-        mover._upgradeMoveUntil = now + 8000;
-        lastMoveAt.set(mover.id, now);
+      } else if (mover) {
+        dispatchToBuilding(mover, rec.x, rec.y, now);
       }
     }
   }
@@ -462,19 +484,13 @@ function createCoordinator({ getBots, sendToUser }) {
         const pick = pickUpgrade(workingBuildings, group, cfg.aheadBy, localMats, now);
         if (!pick) break;
 
-        // Out-of-range upgrade: no affordable session is close enough to
-        // this building. Walk the nearest affordable one over to it so the
-        // upgrade can land on a later tick, then stop for this tick (the
-        // building stays pending until a bot is in range).
+        // Out-of-range upgrade: no affordable session is close enough.
+        // Bring one over jam-safely (recall to base anchor for in-base
+        // buildings; only fetch outside-base ones in daytime), then stop
+        // for this tick — the building stays pending until a bot's in range.
         if (pick.needsMove) {
-          const sid = pick.session.id;
-          if (now - (lastMoveAt.get(sid) || 0) > UPGRADE_MOVE_COOLDOWN_MS &&
-              pick.session.gotoPoint) {
-            pick.session.gotoPoint(pick.building.x, pick.building.y);
-            pick.session._upgradeMoveUntil = now + 8000;  // shield from retreat
-            lastMoveAt.set(sid, now);
-            actions.push({ uid: pick.building.uid, type: pick.building.type, by: sid, move: true });
-          }
+          dispatchToBuilding(pick.session, pick.building.x, pick.building.y, now);
+          actions.push({ uid: pick.building.uid, type: pick.building.type, by: pick.session.id, move: true });
           break;
         }
 
