@@ -26,3 +26,6 @@ logs/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# ── Local-only context pack (not for publishing) ───────────────
+zombscontext/

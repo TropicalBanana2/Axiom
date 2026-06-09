@@ -590,12 +590,43 @@ function assignFarmSlots(allBots) {
   }
 }
 
+// Base resting slots — party bots sharing a base anchor fan out into a small
+// ring around it so they line up instead of stacking on one tile (which jams
+// 1×1 bots and leaves them "out of line"). Mirrors assignFarmSlots but keyed
+// on each bot's home anchor.
+function assignBaseSlots(allBots) {
+  const groups = new Map();   // userId|party|tileX|tileY -> [bot]
+  for (const bot of allBots) {
+    const home = bot._homePoint && bot._homePoint();
+    if (!home) { bot._baseSlot = null; continue; }
+    const pid = (bot.myPlayer && bot.myPlayer.partyId) || 0;
+    const key = bot._userId + "|" + pid + "|" +
+      Math.round(home.x / 48) + "|" + Math.round(home.y / 48);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(bot);
+  }
+  for (const grp of groups.values()) {
+    const n = grp.length;
+    if (n === 1) { grp[0]._baseSlot = { dx: 0, dy: 0 }; continue; }
+    grp.sort((a, b) => a.id - b.id);   // deterministic slot assignment
+    const R = Math.min(64, Math.max(40, n * 12));   // tight ring, distinct tiles
+    for (let i = 0; i < n; i++) {
+      const ang = (2 * Math.PI * i) / n - Math.PI / 2;   // first slot = north
+      grp[i]._baseSlot = {
+        dx: Math.round(Math.cos(ang) * R),
+        dy: Math.round(Math.sin(ang) * R),
+      };
+    }
+  }
+}
+
 // Fast fleet broadcast — live positions + nav for every in-world bot,
 // fanned out to all of a user's connections (dashboard party map AND each
 // /play tab's overlay). Much lighter than the full session list, so it
 // runs several times a second. Built once per user, then shared.
 setInterval(() => {
   assignFarmSlots(bots.values());
+  assignBaseSlots(bots.values());
   const byUser = new Map();   // userId -> [fleetInfo, ...]
   for (const bot of bots.values()) {
     const info = bot.fleetInfo && bot.fleetInfo();

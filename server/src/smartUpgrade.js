@@ -19,6 +19,10 @@
 // balance is stable). No runtime schema dependency.
 
 const { upgradeCost, placeCost, itemUpgradeCost, MAX_TIER } = require("./buildingData");
+// Persist the per-user tuning knobs so they survive a pm2 restart (the
+// bots themselves are re-spawned from the sessions table, so their
+// upgrade settings should come back too). Stored in the schema_kv table.
+const { schemaGet, schemaSet } = require("./db");
 
 const ECONOMY_TYPES = new Set(["GoldStash", "GoldMine"]);
 // Defensive structures + the harvester (resource producer). These are
@@ -99,9 +103,60 @@ const UPGRADE_MOVE_COOLDOWN_MS = 6000;   // re-dispatch throttle for movers
 // warns about (12 §4). Cleared early the moment the bot fires an upgrade.
 const DISPATCH_SHIELD_MS = 45000;
 // Once a bot commits to a farm trip it stays committed at least this long
-// before the dispatcher may pull it back for an upgrade (wiki 12 §4
-// "min-farm-dwell" anti-thrash rule).
-const FARM_MIN_DWELL_MS = 30000;
+// before the dispatcher may pull it back for an upgrade AND before it
+// returns voluntarily (wiki 12 §4 "min-farm-dwell" anti-thrash rule).
+// Short farm-for-a-few-seconds-then-trek-back trips are useless — the
+// travel costs more than the gather — so a trip must pay for itself.
+const FARM_MIN_DWELL_MS = 45000;
+// Placement (MakeBuilding) uses the SAME 576u player-distance cap as
+// upgrades — a rebuild needs a bot right next to the slot.
+const PLACE_RANGE = 550;
+// A bot within this distance of its base anchor counts as "in the base".
+// Bots outside it that aren't farming or mid-dispatch get walked home by
+// the keep-in-base sweep, so they don't strand in the open while the base
+// upgrades. Wider than the nav ARRIVE radius so it doesn't fight homing.
+const BASE_RADIUS = 300;
+// Give up an unreachable errand after this and walk home (no looping).
+const ERRAND_MS = 15000;
+
+// ── Pet (C.A.R.L.) management ──
+// CARL bodies physically jam 1×1 bots in tight base corridors (wiki 12 §3),
+// so we despawn CARL (sell it via DeleteBuilding on the pet uid) while a bot
+// is idle & safe in the base, and re-summon it (BuyItem+EquipItem) the moment
+// it farms or takes damage. We never touch an evolved (tier > 1) CARL —
+// re-buying tier 1 would lose its evolution.
+const PET_COMBAT_MS = 6000;          // keep CARL this long after taking a hit
+const PET_ACT_COOLDOWN_MS = 2500;    // per-bot throttle on buy/equip/sell
+
+// ── Farm harvester ring ──
+// A ring of Harvesters around the farm spot converts each bot's surplus gold
+// into wood/stone ON SITE, so the party banks materials without trekking home.
+// Placement needs a base (GoldStash) to exist, but harvesters themselves can
+// sit anywhere (they're exempt from the stash-distance cap — wiki 10 §B1).
+const FARM_HARV_MAX = 4;             // harvesters to ring around the farm centre
+const FARM_HARV_RADIUS = 192;        // ring radius (4 grid cells out)
+const FARM_HARV_ZONE = 480;          // harvesters within this of centre = "farm" ones
+const FARM_HARV_PLACE_CD = 6000;     // per-slot placement throttle
+const FARM_HARV_FEED_CD = 4000;      // per-harvester feed/collect throttle
+const FARM_HARV_FEED_GOLD = 50;      // gold deposited per feed
+
+// "Emerald" gold mines — the high tier at which gold income is so strong that
+// hoarding gold is pointless and the pickaxe should be pushed to MAX. Tied to
+// the top GoldMine tier reached.
+const EMERALD_MINE_TIER = 7;
+
+// A reachable tile just OUTSIDE a building's footprint, on the side facing
+// `ref` (the base centre) so the bot approaches from open base ground. Used to
+// move a bot next to a building to upgrade/place it — NEVER the solid centre
+// (unreachable → endless pathfind). 84 ≈ half a 96 building + body clearance.
+function approachPoint(bx, by, ref) {
+  let dx = (ref ? ref.x : bx) - bx;
+  let dy = (ref ? ref.y : by) - by;
+  let d = Math.hypot(dx, dy);
+  if (d < 1) { dx = -1; dy = 0; d = 1; }   // ref == building → pick a side
+  const OFF = 84;
+  return { x: Math.round(bx + (dx / d) * OFF), y: Math.round(by + (dy / d) * OFF) };
+}
 // Pickaxe: each farming session upgrades its pickaxe toward this tier
 // (faster wood/stone gathering) — only when the math says it's worth it.
 //
@@ -116,13 +171,15 @@ const FARM_MIN_DWELL_MS = 30000;
 // multiple of that cost (so pickaxe never starves building upgrades).
 const PICK_HARVEST = [0, 1.5, 3, 3, 4.5, 4.5, 6, 9];   // index = tier
 const PICK_STEP_COST = [0, 1000, 3000, 6000, 8000, 24000, 90000]; // [t] = t→t+1
-const PICKAXE_GPH_MAX = 8000;       // max gold per +1 harvest worth paying
-const PICKAXE_GOLD_BUFFER = 4;      // need cost × this much gold before buying
+const PICKAXE_GPH_MAX = 8000;       // max gold per +1 harvest worth paying (scales with mine tier)
 const PICKAXE_COOLDOWN_MS = 4000;   // per-bot, until inventory confirms
 
 // Returns the cost to reach the next harvest-increasing tier, or null if
 // upgrading isn't worth it from `tier` with `gold` on hand.
-function pickaxeWorthIt(tier, gold) {
+//   gphMax  — max gold per +1 harvest we'll pay (Infinity = ignore, force-max).
+//   reserve — gold to keep untouched (the next GoldStash upgrade cost), so a
+//             pickaxe buy never eats into what the base is saving for.
+function pickaxeWorthIt(tier, gold, gphMax, reserve) {
   if (tier >= 7) return null;
   const curH = PICK_HARVEST[tier];
   // Walk forward to the next tier with strictly more harvest.
@@ -130,8 +187,8 @@ function pickaxeWorthIt(tier, gold) {
   while (nt < 7) { cost += PICK_STEP_COST[nt]; nt++; if (PICK_HARVEST[nt] > curH) break; }
   if (PICK_HARVEST[nt] <= curH) return null;       // no improvement reachable
   const gain = PICK_HARVEST[nt] - curH;
-  if (cost / gain > PICKAXE_GPH_MAX) return null;   // too pricey per +harvest
-  if (gold < cost * PICKAXE_GOLD_BUFFER) return null; // keep gold for buildings
+  if (cost / gain > gphMax) return null;           // too pricey per +harvest
+  if (gold < cost + reserve) return null;          // keep the stash's gold untouched
   return cost;
 }
 
@@ -167,16 +224,30 @@ function createCoordinator({ getBots, sendToUser }) {
   // matches its slot. lastRebuildAt throttles re-placement per slot.
   const baseMemory = new Map();
   const lastRebuildAt = new Map();
+  // Throttles for pet management + farm harvesters.
+  const lastPetAt = new Map();        // bot.id -> last pet buy/equip/sell ts
+  const lastHarvPlaceAt = new Map();  // slotKey -> last placement ts
+  const lastHarvFeedAt = new Map();   // harvester uid -> last feed/collect ts
 
   // Buy the next pickaxe tier ONLY when the harvest-gain math says it's
   // worth it (see pickaxeWorthIt). Buys one step at a time toward the
-  // next harvest-increasing tier; the gold buffer keeps it from starving
-  // building upgrades.
-  function maybePickaxe(bot, now) {
+  // next harvest-increasing tier.
+  //   mineTier — top GoldMine tier the base has reached. Willingness to pay
+  //   for the pickaxe scales with it (gold flows faster), and at emerald
+  //   mines the pickaxe is pushed all the way to MAX tier.
+  function maybePickaxe(bot, now, mineTier, stashReserve) {
+    if (!bot.farmSpot) return;          // only farming bots benefit from a pickaxe
     const tier = bot.getPickaxeTier ? bot.getPickaxeTier() : 1;
     if (now - (lastPickaxeAt.get(bot.id) || 0) < PICKAXE_COOLDOWN_MS) return;
     const gold = (bot.myPlayer && bot.myPlayer.gold) || 0;
-    if (pickaxeWorthIt(tier, gold) == null) return;   // not worth it / can't afford
+    const lvl = mineTier || 0;
+    const emerald = lvl >= EMERALD_MINE_TIER;
+    // Emerald mines → ignore the cost-per-harvest cap so the pickaxe reaches
+    // max. Otherwise the cap grows with mine tier (~8k/+harvest at tier 1).
+    // Either way, ALWAYS keep the next stash upgrade's gold in reserve so
+    // pickaxe buying never drains what the base is saving for the stash.
+    const gphMax = emerald ? Infinity : PICKAXE_GPH_MAX * Math.max(1, lvl);
+    if (pickaxeWorthIt(tier, gold, gphMax, stashReserve || 0) == null) return;
     try {
       bot.sendRpc("BuyItem",  { itemName: "Pickaxe", tier: tier + 1 });
       bot.sendRpc("EquipItem", { itemName: "Pickaxe", tier: tier + 1 });
@@ -189,12 +260,41 @@ function createCoordinator({ getBots, sendToUser }) {
       aheadBy: 2, farmWhenSaving: true,
       autoRebuild: true,        // replace dead base buildings while running
       whenDone: "keep",         // when fully maxed: keep | stop | base
+      petManage: true,          // despawn CARL in base, re-summon on damage/farm
+      farmHarvesters: true,     // ring harvesters around the farm + feed/collect
       parties: new Set(),
     };
   }
+  // Durable tuning only. We deliberately DON'T persist the enabled
+  // `parties` set: partyIds are zombs.io runtime values that change when
+  // bots rejoin after a restart, so replaying them could enable
+  // smart-upgrade on the wrong/recycled party. The user re-enables a
+  // party each session; their knobs (aheadBy/farmWhenSaving/etc.) return.
+  const PERSIST_KEY = (userId) => `smartUpgrade:${userId}`;
+  function persistTuning(userId, c) {
+    try {
+      schemaSet(PERSIST_KEY(userId), {
+        aheadBy: c.aheadBy, farmWhenSaving: c.farmWhenSaving,
+        autoRebuild: c.autoRebuild, whenDone: c.whenDone,
+        petManage: c.petManage, farmHarvesters: c.farmHarvesters,
+      });
+    } catch (e) { /* persistence is best-effort; never break the tick */ }
+  }
+  function hydrate(c, userId) {
+    let saved = null;
+    try { saved = schemaGet(PERSIST_KEY(userId)); } catch { saved = null; }
+    if (!saved || typeof saved !== "object") return c;
+    if (typeof saved.aheadBy === "number") c.aheadBy = Math.max(0, Math.min(7, saved.aheadBy | 0));
+    if (typeof saved.farmWhenSaving === "boolean") c.farmWhenSaving = saved.farmWhenSaving;
+    if (typeof saved.autoRebuild === "boolean") c.autoRebuild = saved.autoRebuild;
+    if (["keep", "stop", "base"].includes(saved.whenDone)) c.whenDone = saved.whenDone;
+    if (typeof saved.petManage === "boolean") c.petManage = saved.petManage;
+    if (typeof saved.farmHarvesters === "boolean") c.farmHarvesters = saved.farmHarvesters;
+    return c;
+  }
   function getRaw(userId) {
     let c = configs.get(userId);
-    if (!c) { c = freshConfig(); configs.set(userId, c); }
+    if (!c) { c = hydrate(freshConfig(), userId); configs.set(userId, c); }
     return c;
   }
 
@@ -207,6 +307,9 @@ function createCoordinator({ getBots, sendToUser }) {
     if (partial.whenDone !== undefined && ["keep", "stop", "base"].includes(partial.whenDone)) {
       c.whenDone = partial.whenDone;
     }
+    if (partial.petManage !== undefined) c.petManage = !!partial.petManage;
+    if (partial.farmHarvesters !== undefined) c.farmHarvesters = !!partial.farmHarvesters;
+    persistTuning(userId, c);
     return getConfig(userId);
   }
 
@@ -246,11 +349,15 @@ function createCoordinator({ getBots, sendToUser }) {
 
   // Serialisable config view for the dashboard.
   function getConfig(userId) {
-    const c = configs.get(userId) || freshConfig();
+    // getRaw (not freshConfig) so a dashboard reconnect after a restart
+    // re-reads the persisted tuning instead of showing defaults.
+    const c = getRaw(userId);
     return {
       aheadBy: c.aheadBy, farmWhenSaving: c.farmWhenSaving,
       autoRebuild: c.autoRebuild !== false,
       whenDone: c.whenDone || "keep",
+      petManage: c.petManage !== false,
+      farmHarvesters: c.farmHarvesters !== false,
       parties: [...c.parties],
     };
   }
@@ -397,7 +504,7 @@ function createCoordinator({ getBots, sendToUser }) {
   //   • building is OUTSIDE the base → walk to it, but never cross the map at
   //     night (zombies); wait for daytime.
   // Throttled per bot and shielded from the farm-retreat loop.
-  function dispatchToBuilding(bot, bx, by, now) {
+  function dispatchToBuilding(bot, bx, by, now, stashPos) {
     if (!bot || now - (lastMoveAt.get(bot.id) || 0) <= UPGRADE_MOVE_COOLDOWN_MS) return;
     const home = bot._homePoint && bot._homePoint();
     const nearBase = home && Math.hypot(home.x - bx, home.y - by) <= UPGRADE_RANGE;
@@ -407,19 +514,17 @@ function createCoordinator({ getBots, sendToUser }) {
       if (bot.setNavActive) bot.setNavActive(false);   // walk to the base anchor
     } else {
       if (bot.isNight && bot.isNight()) return;          // don't leave at night
-      // Walk to an APPROACH point short of the building, never its centre:
+      // Walk to an APPROACH point beside the building, never its centre:
       // a 2×2 footprint is solid, so the centre tile is unreachable and the
-      // bot would jitter at the wall (wiki 12 §2). Stopping ~150u out keeps
-      // it comfortably inside the 576u upgrade range. errandTo (unlike the
-      // old gotoPoint) does NOT re-anchor the bot's home to the building —
+      // bot would jitter at the wall (wiki 12 §2). Approach from the side
+      // facing the stash (open base ground). errandTo (unlike the old
+      // gotoPoint) does NOT re-anchor the bot's home to the building —
       // that hijack made later "return to base" trips go to the wrong spot.
-      const p = bot.myPlayer && bot.myPlayer.position;
-      const dx = p ? p.x - bx : 0, dy = p ? p.y - by : 0;
-      const d = Math.hypot(dx, dy) || 1;
-      const ax = bx + (dx / d) * 150, ay = by + (dy / d) * 150;
+      const ap = approachPoint(bx, by, stashPos || (bot.myPlayer && bot.myPlayer.position));
       bot._coordFarming = false;
-      if (bot.errandTo) bot.errandTo(ax, ay);
-      else if (bot.gotoPoint) bot.gotoPoint(ax, ay);
+      bot._errandUntil = now + ERRAND_MS;   // give up if unreachable, walk home
+      if (bot.errandTo) bot.errandTo(ap.x, ap.y);
+      else if (bot.gotoPoint) bot.gotoPoint(ap.x, ap.y);
     }
     // Shield the bot from the farm logic for the WHOLE trip (cleared the
     // moment it fires an upgrade). The old 8 s shield expired mid-walk and
@@ -435,6 +540,8 @@ function createCoordinator({ getBots, sendToUser }) {
   function rebuildPass(partyId, group, buildings, now, actions) {
     let mem = baseMemory.get(partyId);
     if (!mem) { mem = new Map(); baseMemory.set(partyId, mem); }
+    const stashB = buildings.find((b) => b.type === "GoldStash");
+    const stashRef = stashB ? { x: stashB.x, y: stashB.y } : null;
     const EST_MS = 8000;     // must be alive this long before we'll rebuild it
     const REBUILD_CD = 4000; // per-slot throttle
     const TILE = 24;
@@ -464,7 +571,7 @@ function createCoordinator({ getBots, sendToUser }) {
         if (!canAfford(mats, cost)) continue;
         const pos = p.position;
         const d = pos ? Math.hypot(pos.x - rec.x, pos.y - rec.y) : Infinity;
-        if (d <= UPGRADE_RANGE && !placer) placer = bot;
+        if (d <= PLACE_RANGE && !placer) placer = bot;
         // Same min-dwell rule as pickUpgrade: don't yank a bot that just
         // committed to a farm trip to walk back for a rebuild.
         if (bot._coordFarming && now < (bot._farmCommitUntil || 0)) continue;
@@ -473,10 +580,128 @@ function createCoordinator({ getBots, sendToUser }) {
       if (placer) {
         try { placer.sendRpc("MakeBuilding", { type: rec.type, x: rec.x, y: rec.y, yaw: 0 }); } catch {}
         lastRebuildAt.set(key, now);
+        // Placed → if the bot walked here on an errand, send it home.
+        if (placer.navErrand) {
+          placer._upgradeMoveUntil = 0;
+          placer.returnToBase = true;
+          if (placer.setNavActive) placer.setNavActive(false);
+        }
         if (actions) actions.push({ uid: -1, type: rec.type, rebuild: true, by: placer.id });
       } else if (mover) {
-        dispatchToBuilding(mover, rec.x, rec.y, now);
+        dispatchToBuilding(mover, rec.x, rec.y, now, stashRef);
       }
+    }
+  }
+
+  // ── Pet management: despawn CARL while idle & safe in base, re-summon on
+  // damage / while farming. CARL's body jams 1×1 bots in tight base corridors.
+  function managePet(bot, now) {
+    const p = bot.myPlayer; if (!p) return;
+    const petUid = p.petUid || 0;
+    const has = !!(petUid && bot.entities && bot.entities.has(petUid));
+    const hp = p.health || 0, maxHp = p.maxHealth || 0;
+    // Detect a hit (health dropped since last pass) → keep CARL out a while.
+    if (bot._petLastHp != null && hp < bot._petLastHp - 0.5) bot._petCombatUntil = now + PET_COMBAT_MS;
+    bot._petLastHp = hp;
+    const damaged = maxHp > 0 && hp > 0 && hp < maxHp * 0.999;   // below full = under threat
+    const wantCarl = !!(bot._coordFarming || damaged || (now < (bot._petCombatUntil || 0)) || p.dead);
+
+    if (now - (lastPetAt.get(bot.id) || 0) < PET_ACT_COOLDOWN_MS) return;
+    if (wantCarl) {
+      if (!has) {
+        // Re-acquire (sold pets must be re-bought before equipping).
+        try {
+          bot.sendRpc("BuyItem",  { itemName: "PetCARL", tier: 1 });
+          bot.sendRpc("EquipItem", { itemName: "PetCARL", tier: 1 });
+        } catch {}
+        lastPetAt.set(bot.id, now);
+      }
+      return;
+    }
+    // Not wanted → despawn, but only when actually idle in the base and the
+    // pet is unevolved (selling a tier>1 CARL would waste its evolution).
+    if (!has) return;
+    const petTier = (bot.myPet && bot.myPet.tier) || 1;
+    if (petTier > 1) return;
+    const home = bot._homePoint && bot._homePoint();
+    const pos = p.position;
+    const inBase = home && pos && Math.hypot(pos.x - home.x, pos.y - home.y) <= BASE_RADIUS;
+    if (!inBase) return;
+    try { bot.sendRpc("DeleteBuilding", { uid: petUid }); } catch {}   // "sell" the pet to despawn it
+    lastPetAt.set(bot.id, now);
+  }
+
+  // Centre of the party's farm spots (where the harvester ring goes).
+  function farmCentre(group) {
+    let sx = 0, sy = 0, n = 0;
+    for (const bot of group) {
+      const f = bot.farmSpot; if (!f) continue;
+      sx += f.x; sy += f.y; n++;
+    }
+    return n ? { x: sx / n, y: sy / n } : null;
+  }
+
+  // ── Farm harvester ring + distributed feed/collect ──
+  // Place up to FARM_HARV_MAX harvesters around the farm centre, then feed
+  // each one gold and collect its wood/stone from whichever bot is nearest —
+  // converting surplus gold into materials on site. Needs a base (GoldStash).
+  function farmHarvestPass(group, buildings, now, actions) {
+    const centre = farmCentre(group);
+    if (!centre) return;
+    if (!buildings.some((b) => b.type === "GoldStash")) return;   // need a base to build
+
+    const farmHarv = buildings.filter((b) =>
+      b.type === "Harvester" && Math.hypot(b.x - centre.x, b.y - centre.y) <= FARM_HARV_ZONE);
+
+    // Placement — fill the ring (one per tick).
+    if (farmHarv.length < FARM_HARV_MAX) {
+      const targets = [];
+      for (const bot of group) for (const t of (bot.farmTargets || [])) targets.push(t);
+      for (let i = 0; i < FARM_HARV_MAX; i++) {
+        const a = (2 * Math.PI * i) / FARM_HARV_MAX - Math.PI / 2;
+        const sx = Math.round((centre.x + Math.cos(a) * FARM_HARV_RADIUS) / 48) * 48;
+        const sy = Math.round((centre.y + Math.sin(a) * FARM_HARV_RADIUS) / 48) * 48;
+        if (buildings.some((b) => Math.hypot(b.x - sx, b.y - sy) < 72)) continue;   // occupied
+        if (targets.some((t) => Math.hypot(t.x - sx, t.y - sy) < 80)) continue;     // on tree/stone
+        const slotKey = Math.round(sx / 48) + ":" + Math.round(sy / 48);
+        if (now - (lastHarvPlaceAt.get(slotKey) || 0) < FARM_HARV_PLACE_CD) continue;
+        const placer = group.find((bot) => {
+          const p = bot.myPlayer;
+          if (!p || !p.position) return false;
+          if (Math.hypot(p.position.x - sx, p.position.y - sy) > PLACE_RANGE) return false;
+          return (p.wood || 0) >= 5 && (p.stone || 0) >= 5;
+        });
+        if (!placer) continue;
+        // Rotate each harvester to face the farm centre. Yaw is degrees with
+        // 0 = UP, increasing clockwise, in 90° steps (only Harvester and
+        // MeleeTower may rotate — wiki 10 §B1). The +450 converts the math
+        // angle (0 = east) to the game's 0 = up frame, then snap to cardinal.
+        const inwardDeg = (Math.atan2(centre.y - sy, centre.x - sx) * 180 / Math.PI + 450) % 360;
+        const yaw = (Math.round(inwardDeg / 90) * 90) % 360;
+        try { placer.sendRpc("MakeBuilding", { type: "Harvester", x: sx, y: sy, yaw }); } catch {}
+        lastHarvPlaceAt.set(slotKey, now);
+        if (actions) actions.push({ uid: -2, type: "Harvester", farmHarvester: true, by: placer.id });
+        break;   // one placement per tick
+      }
+    }
+
+    // Distributed feed + collect — nearest in-range bot services each harvester.
+    for (const h of farmHarv) {
+      if (now - (lastHarvFeedAt.get(h.uid) || 0) < FARM_HARV_FEED_CD) continue;
+      let best = null, bestD = Infinity;
+      for (const bot of group) {
+        const p = bot.myPlayer; if (!p || !p.position) continue;
+        const d = Math.hypot(p.position.x - h.x, p.position.y - h.y);
+        if (d <= UPGRADE_RANGE && d < bestD) { bestD = d; best = bot; }
+      }
+      if (!best) continue;
+      try {
+        if ((best.myPlayer.gold || 0) > FARM_HARV_FEED_GOLD * 2) {
+          best.sendRpc("AddDepositToHarvester", { uid: h.uid, deposit: FARM_HARV_FEED_GOLD });
+        }
+        best.sendRpc("CollectHarvester", { uid: h.uid });
+      } catch {}
+      lastHarvFeedAt.set(h.uid, now);
     }
   }
 
@@ -486,6 +711,9 @@ function createCoordinator({ getBots, sendToUser }) {
     const statusGroups = [];
 
     for (const [partyId, group] of groups) {
+      // Per-party fault isolation: a malformed building/bot state in one
+      // party must not abort the whole user's pass and starve the others.
+      try {
       const enabled = cfg.parties.has(partyId);
       const buildings = mergeBuildings(group);
       if (buildings.length === 0) {
@@ -515,8 +743,18 @@ function createCoordinator({ getBots, sendToUser }) {
         continue;
       }
 
-      // Buy better pickaxes for faster farming (uses each bot's own gold).
-      for (const bot of group) maybePickaxe(bot, now);
+      // Buy better pickaxes for FARMING bots (uses each bot's own gold).
+      // Willingness scales with the top GoldMine tier (emerald → max), but the
+      // next GoldStash upgrade's gold is always reserved first.
+      let mineTier = 0, stashReserve = 0;
+      for (const b of buildings) {
+        if (b.type === "GoldMine" && b.tier > mineTier) mineTier = b.tier;
+        if (b.type === "GoldStash") {
+          const c = upgradeCost("GoldStash", b.tier);
+          if (c && c.gold > stashReserve) stashReserve = c.gold;
+        }
+      }
+      for (const bot of group) maybePickaxe(bot, now, mineTier, stashReserve);
 
       // Mutable per-session material copy for in-cycle deduction.
       const localMats = new Map();
@@ -530,6 +768,8 @@ function createCoordinator({ getBots, sendToUser }) {
       // Mutable tier copy so a burst advances the plan within the tick.
       const tierByUid = new Map(buildings.map((b) => [b.uid, b.tier]));
       const workingBuildings = buildings.map((b) => ({ ...b }));
+      const stashB = buildings.find((b) => b.type === "GoldStash");
+      const stashPos = stashB ? { x: stashB.x, y: stashB.y } : null;
 
       const actions = [];
       for (let i = 0; i < MAX_UPGRADES_PER_TICK; i++) {
@@ -543,7 +783,7 @@ function createCoordinator({ getBots, sendToUser }) {
         // buildings; only fetch outside-base ones in daytime), then stop
         // for this tick — the building stays pending until a bot's in range.
         if (pick.needsMove) {
-          dispatchToBuilding(pick.session, pick.building.x, pick.building.y, now);
+          dispatchToBuilding(pick.session, pick.building.x, pick.building.y, now, stashPos);
           actions.push({ uid: pick.building.uid, type: pick.building.type, by: pick.session.id, move: true });
           break;
         }
@@ -676,16 +916,58 @@ function createCoordinator({ getBots, sendToUser }) {
               // Min-dwell: once committed, the dispatcher may not pull this
               // bot back for an upgrade until the dwell elapses (12 §4).
               bot._farmCommitUntil = now + FARM_MIN_DWELL_MS;
+              bot.returnToBase = true;   // so the later recall WALKS home, not stop-in-place
               bot.setNavActive(true);
             }
           } else {
-            // Return only when NOT saving AND well-stocked on both.
-            if (!saving && wood >= FARM_CEIL && stone >= FARM_CEIL) {
+            // Return only when the run has paid for itself (min dwell) AND
+            // we're NOT saving AND well-stocked on both. The dwell floor
+            // kills the useless farm-for-5s-then-trek-back cycling.
+            if (now >= (bot._farmCommitUntil || 0) &&
+                !saving && wood >= FARM_CEIL && stone >= FARM_CEIL) {
               bot._coordFarming = false;
               bot.setNavActive(false);   // walk back home + settle
             }
           }
         }
+      }
+
+      // Errand timeout: a bot that can't reach its building (walled in) gives
+      // up after ERRAND_MS and walks home — no looping, no blacklist.
+      for (const bot of group) {
+        if (bot.navErrand && now > (bot._errandUntil || 0)) {
+          bot.returnToBase = true;
+          bot.setNavActive(false);   // clears the errand, walks home
+        }
+      }
+
+      // ── Keep non-farming bots INSIDE the base while upgrading ──
+      // Anything that isn't actively farming, mid-dispatch, or on an errand
+      // belongs in the base, not idling in the open. Walk stragglers home —
+      // edge-triggered on navReturning so we don't reset their path per tick.
+      if (!resting) {
+        for (const bot of group) {
+          if (bot._coordFarming) continue;   // farming → leave it out
+          if (bot.navErrand) continue;       // heading to a building → leave it
+          if (bot._upgradeMoveUntil && now < bot._upgradeMoveUntil) continue;
+          const home = bot._homePoint && bot._homePoint();
+          const p = bot.myPlayer && bot.myPlayer.position;
+          if (!home || !p) continue;
+          const away = Math.hypot(p.x - home.x, p.y - home.y) > BASE_RADIUS;
+          if (away && !bot.navReturning) {
+            bot.returnToBase = true;
+            if (bot.setNavActive) bot.setNavActive(false);   // begin walking home
+          }
+        }
+      }
+
+      // Pet management (despawn CARL in base / re-summon on damage/farm).
+      if (cfg.petManage !== false) {
+        for (const bot of group) managePet(bot, now);
+      }
+      // Farm harvester ring — convert surplus gold to materials at the farm.
+      if (cfg.farmHarvesters !== false) {
+        farmHarvestPass(group, buildings, now, actions);
       }
 
       // Build a compact tier summary for the dashboard.
@@ -714,6 +996,14 @@ function createCoordinator({ getBots, sendToUser }) {
         })),
         lastActions: actions,
       });
+      } catch (ePart) {
+        console.error("[smartUpgrade] party", partyId, "error:", ePart && ePart.message);
+        statusGroups.push({
+          partyId, members: group.length,
+          enabled: cfg.parties.has(partyId),
+          error: (ePart && ePart.message) || "error",
+        });
+      }
     }
 
     statuses.set(userId, { ts: now, aheadBy: cfg.aheadBy, groups: statusGroups });
@@ -721,14 +1011,52 @@ function createCoordinator({ getBots, sendToUser }) {
     sendToUser(userId, { op: "smartUpgrade", data: statuses.get(userId) });
   }
 
+  // ── Bounded memory ──────────────────────────────────────────────────
+  // The per-uid / per-slot timestamp maps (lastUpgradeAt, lastRebuildAt)
+  // are keyed by values that churn over a server's lifetime — buildings
+  // are destroyed and rebuilt, bases get relocated — so without pruning
+  // they grow without bound. Likewise per-party state (savingSince,
+  // baseMemory) leaks once a party disappears entirely. Prune periodically.
+  const PRUNE_EVERY = 60;             // ~once a minute (TICK_MS = 1000)
+  const STALE_TS_MS = 5 * 60 * 1000;  // forget cooldown stamps older than 5 min
+  let tickCount = 0;
+
+  function pruneStale(now, activeParties) {
+    for (const [k, t] of lastUpgradeAt) if (now - t > STALE_TS_MS) lastUpgradeAt.delete(k);
+    for (const [k, t] of lastRebuildAt) if (now - t > STALE_TS_MS) lastRebuildAt.delete(k);
+    for (const [k, t] of lastPickaxeAt) if (now - t > STALE_TS_MS) lastPickaxeAt.delete(k);
+    for (const [k, t] of lastMoveAt)      if (now - t > STALE_TS_MS) lastMoveAt.delete(k);
+    for (const [k, t] of lastPetAt)       if (now - t > STALE_TS_MS) lastPetAt.delete(k);
+    for (const [k, t] of lastHarvPlaceAt) if (now - t > STALE_TS_MS) lastHarvPlaceAt.delete(k);
+    for (const [k, t] of lastHarvFeedAt)  if (now - t > STALE_TS_MS) lastHarvFeedAt.delete(k);
+    // Drop per-party state for parties no bot is in anymore.
+    for (const pid of savingSince.keys()) if (!activeParties.has(pid)) savingSince.delete(pid);
+    for (const pid of baseMemory.keys())  if (!activeParties.has(pid)) baseMemory.delete(pid);
+  }
+
   function tick() {
-    for (const [userId, cfg] of configs) {
-      // Run whenever the user has any party enabled (status for other
-      // parties is computed in the same pass).
-      if (!cfg.parties || cfg.parties.size === 0) continue;
-      try { runForUser(userId, cfg); } catch (e) {
-        console.error("[smartUpgrade] tick error for user", userId, e.message);
+    const now = Date.now();
+    // Outer guard: a timer callback that throws would surface as an
+    // uncaughtException and could take the sessions process down. Never
+    // let the coordinator be a single point of failure for the server.
+    try {
+      for (const [userId, cfg] of configs) {
+        // Run whenever the user has any party enabled (status for other
+        // parties is computed in the same pass).
+        if (!cfg.parties || cfg.parties.size === 0) continue;
+        try { runForUser(userId, cfg); } catch (e) {
+          console.error("[smartUpgrade] tick error for user", userId, e && e.message);
+        }
       }
+      if (++tickCount % PRUNE_EVERY === 0) {
+        const activeParties = new Set();
+        for (const bot of getBots()) {
+          if (bot && bot.myPlayer && bot.myPlayer.partyId) activeParties.add(bot.myPlayer.partyId);
+        }
+        pruneStale(now, activeParties);
+      }
+    } catch (e) {
+      console.error("[smartUpgrade] tick fatal:", e && e.message);
     }
   }
 

@@ -958,7 +958,14 @@ class Bot extends EventEmitter {
 
     // A pending errand (smart-upgrade fetching us to a building) overrides
     // the base anchor as the "idle" destination — navBase itself unchanged.
-    const home = this.navErrand || this._homePoint();
+    // Otherwise: base anchor + this bot's resting slot, so party bots line
+    // up in a tight ring inside the base instead of all stacking on one
+    // point (1×1 players collide and jam — see assignBaseSlots).
+    let home = this._homePoint();
+    if (home && this._baseSlot) {
+      home = { x: home.x + this._baseSlot.dx, y: home.y + this._baseSlot.dy };
+    }
+    if (this.navErrand) home = this.navErrand;
     // Farm target = the configured spot PLUS this bot's coordination slot
     // offset, so multiple party bots fan out around the same tree/stone
     // instead of stacking on one pixel (see assignFarmSlots). Angle is
@@ -1101,6 +1108,27 @@ class Bot extends EventEmitter {
       wp = this.navPath[++this.navIndex];
     }
     this.navStatus = desiredIsFarm ? "to-farm" : "returning";
+
+    // ── Stuck detection + jostle ──
+    // Bots wedge against each other, their own pets (which the pathfinder
+    // can't see), or a wall corner and stop making headway. Detect no
+    // progress and shove sideways for a tick, then force a fresh path — that
+    // usually breaks the deadlock and finds a different route around it.
+    const prev = this._navPrevPos;
+    const moved = prev ? Math.hypot(me.x - prev.x, me.y - prev.y) : 99;
+    this._navPrevPos = { x: me.x, y: me.y };
+    this._navStuck = (moved < 4) ? (this._navStuck || 0) + 1 : 0;
+    if (this._navStuck >= 14) {
+      // Jostle perpendicular to the intended heading, alternating sides each
+      // burst so we wiggle free rather than pushing the same way forever.
+      const head = this.angleTo(wp.x, wp.y);
+      const side = (((this._navStuck / 14) | 0) & 1) ? 90 : -90;
+      this.moveAngle(head + side);
+      this.navPath = null;            // replan next tick → likely a new route
+      this.navReplanTick = 0;
+      if (this._navStuck > 70) this._navStuck = 0;   // periodic reset to re-evaluate
+      return;
+    }
     this.moveToward(wp.x, wp.y);
   }
 
