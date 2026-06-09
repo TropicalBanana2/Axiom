@@ -54,6 +54,11 @@
         getValue: (id) => valueStore.get(id),
         setValue: (id, v) => { valueStore.set(id, v); panel.syncControl(id, v); },
         trigger: (id) => panel.triggerScript(id),
+        // World-interaction features (pick modes, ghost previews, the
+        // continuous base builder) close the panel so the user can act
+        // immediately instead of hunting for the × button.
+        closePanel: () => panel.toggle(false),
+        openPanel: () => panel.toggle(true),
       },
       storage: {
         get: (k) => ctxStorage.has(k) ? ctxStorage.get(k) : JSON.parse(localStorage.getItem(`axiom.kv.${k}`) || "null"),
@@ -103,7 +108,12 @@
   class Panel {
     constructor(schema) {
       this.schema = schema;
-      this.activeTab = schema.meta.landingTabId || schema.tabs[0]?.id;
+      // Reopen on the tab the user last used (falls back to the schema's
+      // landing tab when it no longer exists).
+      const lastTab = localStorage.getItem("axiom.lastTab");
+      this.activeTab = (lastTab && schema.tabs.some((t) => t.id === lastTab))
+        ? lastTab
+        : (schema.meta.landingTabId || schema.tabs[0]?.id);
       this.searchQ = "";
       this.visible = false;
       this.controlNodes = new Map();
@@ -166,7 +176,12 @@
         const b = document.createElement("button");
         b.className = `ax-panel-tab ${tab.id === this.activeTab ? "active" : ""}`;
         b.innerHTML = `<span class="ax-panel-tab-dot"></span>${escape(tab.name)}`;
-        b.onclick = () => { this.activeTab = tab.id; this.searchQ = ""; this.root.querySelector("#axp-search").value = ""; this.render(); };
+        b.onclick = () => {
+          this.activeTab = tab.id;
+          localStorage.setItem("axiom.lastTab", tab.id);
+          this.searchQ = ""; this.root.querySelector("#axp-search").value = "";
+          this.render();
+        };
         tabsEl.appendChild(b);
       }
     }
@@ -485,6 +500,117 @@
   }
   function escape(s) { return String(s).replace(/[<>&]/g, (c) => ({ "<":"&lt;", ">":"&gt;", "&":"&amp;" }[c])); }
   function htmlEl(html) { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstChild; }
+
+  // ── Continuous base builder ─────────────────────────────────────
+  // window.AxiomBuild.continuous(items, opts) walks the player through
+  // building a saved layout. The zombs.io server rejects MakeBuilding
+  // beyond ~576u of the player, so the old "fire all 500 RPCs at once"
+  // approach silently dropped everything out of range. Instead this
+  // keeps running: every tick it places whichever missing buildings are
+  // inside build range of wherever the player is standing NOW, so the
+  // user strolls around the footprint while the layout fills in.
+  //
+  // A center-screen liquid-glass HUD shows live progress. Enter ends
+  // the run at any time (and is how you dismiss the "fully built"
+  // banner); Esc cancels. Slots that refuse to place after several
+  // in-range attempts (occupied by a tree/rock) are counted as blocked
+  // rather than stalling completion forever.
+  const AxiomBuild = (window.AxiomBuild = {
+    active: null,
+    _toast(msg) { try { window.game.ui.components.PopupOverlay.showHint(msg); } catch { log(msg); } },
+    stop(msg) {
+      const a = this.active;
+      if (!a) return;
+      clearInterval(a.timer);
+      window.removeEventListener("keydown", a.onKey, true);
+      try { a.hud.remove(); } catch {}
+      this.active = null;
+      if (msg) this._toast(msg);
+    },
+    continuous(items, opts = {}) {
+      this.stop();
+      const game = window.game;
+      if (!game || !game.ui || !game.network) { this._toast("Base Builder: attach first"); return; }
+      if (!Array.isArray(items) || items.length === 0) { this._toast("Base Builder: nothing to build"); return; }
+
+      const RANGE = 520;        // stay safely under the server's 576u cap
+      const RETRY_MS = 1600;    // per-slot resend while unconfirmed
+      const MAX_TRIES = 8;      // in-range attempts before we call a slot blocked
+      const MAX_PER_TICK = 12;  // don't flood the socket
+      const todo = items.map((it) => ({
+        type: it.type, x: Math.round(it.x), y: Math.round(it.y), yaw: it.yaw || 0,
+        retryAt: 0, tries: 0, done: false, blocked: false,
+      }));
+
+      const hud = document.createElement("div");
+      hud.className = "ax-build-hud";
+      hud.innerHTML =
+        '<div class="ax-build-hud-title"></div>' +
+        '<div class="ax-build-hud-line"></div>' +
+        '<div class="ax-build-hud-bar"><div class="ax-build-hud-fill"></div></div>' +
+        '<div class="ax-build-hud-keys"><b>Enter</b> finish · <b>Esc</b> cancel</div>';
+      document.body.appendChild(hud);
+      const title = hud.querySelector(".ax-build-hud-title");
+      const line = hud.querySelector(".ax-build-hud-line");
+      const fill = hud.querySelector(".ax-build-hud-fill");
+      title.textContent = opts.name ? "Building “" + opts.name + "”" : "Base Builder";
+
+      // A slot counts as placed once any same-type building sits on it.
+      const placedAt = (it) => {
+        for (const b of Object.values(game.ui.buildings || {})) {
+          if (b.type === it.type && Math.abs(b.x - it.x) < 36 && Math.abs(b.y - it.y) < 36) return true;
+        }
+        return false;
+      };
+
+      const onKey = (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault(); e.stopImmediatePropagation();
+          const a = this.active;
+          const open = a ? a.todo.filter((t) => !t.done && !t.blocked).length : 0;
+          this.stop(open === 0 ? "Base built ✓" : "Base Builder finished (" + open + " left unplaced)");
+        } else if (e.key === "Escape") {
+          e.preventDefault(); e.stopImmediatePropagation();
+          this.stop("Base Builder cancelled");
+        }
+      };
+      window.addEventListener("keydown", onKey, true);
+
+      const tick = () => {
+        const p = game.ui.playerTick && game.ui.playerTick.position;
+        const now = Date.now();
+        let open = 0, blocked = 0, sent = 0;
+        for (const it of todo) {
+          if (it.done) continue;
+          if (placedAt(it)) { it.done = true; continue; }
+          if (it.blocked) { blocked++; continue; }
+          open++;
+          if (!p || sent >= MAX_PER_TICK || now < it.retryAt) continue;
+          if (Math.hypot(p.x - it.x, p.y - it.y) > RANGE) continue;
+          try {
+            game.network.sendRpc({ name: "MakeBuilding", type: it.type, x: it.x, y: it.y, yaw: it.yaw });
+          } catch {}
+          it.retryAt = now + RETRY_MS;
+          if (++it.tries >= MAX_TRIES) it.blocked = true;
+          sent++;
+        }
+        const placed = todo.length - open - blocked;
+        fill.style.width = ((placed / todo.length) * 100).toFixed(1) + "%";
+        if (open === 0) {
+          hud.classList.add("done");
+          title.textContent = blocked ? "Base built — " + blocked + " spot" + (blocked === 1 ? "" : "s") + " blocked" : "Base fully built";
+          line.textContent = "press Enter to finish";
+        } else {
+          hud.classList.remove("done");
+          line.textContent = placed + " / " + todo.length + " placed — walk around the layout to place the rest" +
+            (blocked ? " · " + blocked + " blocked" : "");
+        }
+      };
+
+      this.active = { todo, hud, onKey, timer: setInterval(tick, 350) };
+      tick();
+    },
+  });
 
   // ── Fleet overlay ───────────────────────────────────────────────
   // Always-on overlay drawn over the game: each party bot gets a label

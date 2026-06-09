@@ -303,23 +303,28 @@ if (on) {
 ctx.toast(on ? 'Auto Build armed' : 'Auto Build off (layout cleared)');`),
 
   scr_wallblock: scr("scr_wallblock", "Wall Block",
-    `// Place a ring of walls around your gold stash.
+    `// Place a ring of walls around your gold stash — via the continuous
+// builder, so a big ring fills in as you walk around it (the server
+// rejects placements beyond ~576u of you) and you get the glass HUD
+// with live progress. Enter finishes, Esc cancels.
 if (!value) return;
 const stash = Object.values(ctx.game.game?.ui?.buildings || {}).find((b) => b.type === 'GoldStash');
 if (!stash) return ctx.toast('place a stash first');
 const radius = ctx.ui.getValue('build-wall-radius') || 3;
-let placed = 0;
+const items = [];
 for (let dx = -radius; dx <= radius; dx++) {
   for (let dy = -radius; dy <= radius; dy++) {
     if (Math.max(Math.abs(dx), Math.abs(dy)) !== radius) continue;
-    ctx.game.game.network.sendRpc({
-      name: 'MakeBuilding', type: 'Wall',
-      x: stash.x + dx * 48, y: stash.y + dy * 48, yaw: 0,
-    });
-    placed++;
+    items.push({ type: 'Wall', x: stash.x + dx * 48, y: stash.y + dy * 48, yaw: 0 });
   }
 }
-ctx.toast(\`placed \${placed} walls\`);`),
+if (window.AxiomBuild) {
+  ctx.ui.closePanel && ctx.ui.closePanel();
+  window.AxiomBuild.continuous(items, { name: 'wall ring' });
+} else {
+  for (const it of items) ctx.game.game.network.sendRpc({ name: 'MakeBuilding', ...it });
+  ctx.toast('placed ' + items.length + ' walls');
+}`),
 
   scr_autotrap: scr("scr_autotrap", "Auto Trap",
     `// When an enemy player is within ~600 units, drop a SlowTrap on
@@ -1070,6 +1075,8 @@ SF.cancel = () => {
   window.removeEventListener('keydown', onKey, true);
   try { banner.remove(); } catch {}
 };
+// Pick mode means clicking the WORLD — drop the panel out of the way.
+ctx.ui.closePanel && ctx.ui.closePanel();
 setBanner('Smart Farm: click the TREE   ·   Esc / right-click to cancel');`),
 
   // ── Base Saver ──
@@ -1091,13 +1098,17 @@ const game = window.game;
 const gs = Object.values(game?.ui?.buildings || {}).find((b) => b.type === 'GoldStash');
 if (!gs) { ctx.toast('Build Plus Base: place a GoldStash first'); return; }
 const data = JSON.parse('{"31464096":{"x":-72,"y":-120,"type":"Door"},"31464097":{"x":-24,"y":-120,"type":"Door"},"31464098":{"x":-24,"y":-72,"type":"Door"},"31464099":{"x":-72,"y":-72,"type":"Door"},"31464100":{"x":72,"y":-72,"type":"Door"},"31464101":{"x":120,"y":-72,"type":"Door"},"31464102":{"x":120,"y":-24,"type":"Door"},"31464103":{"x":72,"y":-24,"type":"Door"},"31464104":{"x":24,"y":72,"type":"Door"},"31464105":{"x":72,"y":72,"type":"Door"},"31464106":{"x":72,"y":120,"type":"Door"},"31464107":{"x":24,"y":120,"type":"Door"},"31464108":{"x":-120,"y":24,"type":"Door"},"31464109":{"x":-72,"y":24,"type":"Door"},"31464110":{"x":-72,"y":72,"type":"Door"},"31464111":{"x":-120,"y":72,"type":"Door"},"31464112":{"x":-120,"y":-24,"type":"SlowTrap"},"31464113":{"x":-72,"y":-24,"type":"SlowTrap"},"31464114":{"x":24,"y":-120,"type":"SlowTrap"},"31464115":{"x":24,"y":-72,"type":"SlowTrap"},"31464116":{"x":72,"y":24,"type":"SlowTrap"},"31464117":{"x":120,"y":24,"type":"SlowTrap"},"31464118":{"x":-24,"y":72,"type":"SlowTrap"},"31464119":{"x":-24,"y":120,"type":"SlowTrap"},"31464120":{"x":-144,"y":-96,"type":"GoldMine"},"31464121":{"x":-96,"y":-192,"type":"GoldMine"},"31464122":{"x":96,"y":-144,"type":"GoldMine"},"31464123":{"x":192,"y":-96,"type":"GoldMine"},"31464124":{"x":144,"y":96,"type":"GoldMine"},"31464126":{"x":-96,"y":144,"type":"GoldMine"},"31464127":{"x":-192,"y":96,"type":"GoldMine"},"31464128":{"x":192,"y":192,"type":"GoldMine"},"31464129":{"x":0,"y":-192,"type":"Harvester"},"31464130":{"x":-192,"y":0,"type":"Harvester"},"31464132":{"x":0,"y":192,"type":"Harvester"},"31464133":{"x":-192,"y":192,"type":"BombTower"},"31464134":{"x":-96,"y":240,"type":"BombTower"},"31464136":{"x":-192,"y":288,"type":"BombTower"},"31464776":{"x":-288,"y":144,"type":"ArrowTower"},"31464800":{"x":-336,"y":240,"type":"ArrowTower"},"31464825":{"x":-384,"y":144,"type":"CannonTower"},"31464837":{"x":-432,"y":240,"type":"CannonTower"},"31464917":{"x":-336,"y":48,"type":"CannonTower"},"31464930":{"x":-432,"y":48,"type":"CannonTower"},"31464946":{"x":-264,"y":24,"type":"Wall"},"31464953":{"x":-264,"y":72,"type":"Wall"},"31464980":{"x":-528,"y":48,"type":"MagicTower"},"31464993":{"x":-480,"y":144,"type":"MagicTower"},"31464998":{"x":-528,"y":240,"type":"MagicTower"},"31465007":{"x":-600,"y":24,"type":"Wall"},"31465014":{"x":-648,"y":24,"type":"Door"},"31465019":{"x":-600,"y":72,"type":"Door"},"31465022":{"x":-552,"y":120,"type":"Door"},"31465025":{"x":-552,"y":168,"type":"Door"},"31465049":{"x":-600,"y":216,"type":"SlowTrap"},"31465052":{"x":-648,"y":264,"type":"SlowTrap"},"31465060":{"x":-600,"y":264,"type":"Wall"},"31465080":{"x":-576,"y":-48,"type":"Harvester"},"31465081":{"x":-648,"y":-72,"type":"Door"},"31465082":{"x":-600,"y":-120,"type":"Door"},"31465083":{"x":-648,"y":-24,"type":"SlowTrap"},"31465084":{"x":-504,"y":-24,"type":"SlowTrap"},"31465085":{"x":-456,"y":-24,"type":"SlowTrap"},"31465086":{"x":-408,"y":-24,"type":"SlowTrap"},"31465087":{"x":-360,"y":-24,"type":"SlowTrap"},"31465088":{"x":-312,"y":-24,"type":"SlowTrap"},"31465089":{"x":-264,"y":-24,"type":"SlowTrap"},"31465090":{"x":-552,"y":-120,"type":"Wall"},"31465091":{"x":-552,"y":-168,"type":"Door"},"31465092":{"x":-552,"y":-216,"type":"Door"},"31465093":{"x":-480,"y":-96,"type":"MagicTower"},"31465094":{"x":-480,"y":-192,"type":"MagicTower"},"31465095":{"x":-384,"y":-192,"type":"CannonTower"},"31465096":{"x":-384,"y":-96,"type":"CannonTower"},"31465097":{"x":-288,"y":-192,"type":"ArrowTower"},"31465098":{"x":-288,"y":-96,"type":"ArrowTower"},"31465099":{"x":-192,"y":-192,"type":"ArrowTower"},"31465100":{"x":-216,"y":-120,"type":"Wall"},"31465101":{"x":-216,"y":-72,"type":"Wall"},"31465102":{"x":-600,"y":-264,"type":"Door"},"31465103":{"x":-600,"y":-312,"type":"Door"},"31465104":{"x":-648,"y":-360,"type":"Door"},"31465105":{"x":-648,"y":-408,"type":"Door"},"31465106":{"x":-528,"y":-288,"type":"MagicTower"},"31465107":{"x":-528,"y":-384,"type":"ArrowTower"},"31465108":{"x":-600,"y":-408,"type":"Wall"},"31465109":{"x":-600,"y":-360,"type":"Wall"},"31465110":{"x":-552,"y":-456,"type":"Wall"},"31465111":{"x":-504,"y":-456,"type":"Wall"},"31465112":{"x":-504,"y":-504,"type":"Wall"},"31465113":{"x":-456,"y":-552,"type":"Wall"},"31465114":{"x":-408,"y":-552,"type":"Wall"},"31465115":{"x":-408,"y":-600,"type":"Wall"},"31465116":{"x":-360,"y":-648,"type":"Wall"},"31465117":{"x":-312,"y":-648,"type":"Wall"},"31465118":{"x":-336,"y":-576,"type":"ArrowTower"},"31465119":{"x":-336,"y":-480,"type":"CannonTower"},"31465120":{"x":-432,"y":-384,"type":"CannonTower"},"31465121":{"x":-432,"y":-288,"type":"CannonTower"},"31465122":{"x":-240,"y":-480,"type":"CannonTower"},"31465123":{"x":-144,"y":-432,"type":"CannonTower"},"31465124":{"x":-48,"y":-384,"type":"CannonTower"},"31465125":{"x":-240,"y":-576,"type":"MagicTower"},"31465126":{"x":-144,"y":-528,"type":"MagicTower"},"31465127":{"x":-48,"y":-480,"type":"MagicTower"},"31465128":{"x":-240,"y":-384,"type":"ArrowTower"},"31465129":{"x":-144,"y":-336,"type":"ArrowTower"},"31465130":{"x":-48,"y":-288,"type":"ArrowTower"},"31465131":{"x":-120,"y":-264,"type":"Wall"},"31465132":{"x":-168,"y":-264,"type":"Wall"},"31465133":{"x":-432,"y":-480,"type":"BombTower"},"31465134":{"x":-336,"y":-384,"type":"BombTower"},"31465136":{"x":-240,"y":-288,"type":"BombTower"},"31465137":{"x":-336,"y":-288,"type":"ArrowTower"},"31465138":{"x":-312,"y":-696,"type":"Door"},"31465139":{"x":-360,"y":-696,"type":"Door"},"31465140":{"x":-408,"y":-648,"type":"Door"},"31465141":{"x":-456,"y":-600,"type":"Door"},"31465142":{"x":-504,"y":-552,"type":"Door"},"31465143":{"x":-552,"y":-504,"type":"Door"},"31465144":{"x":-600,"y":-456,"type":"Door"},"31465145":{"x":-264,"y":-648,"type":"Door"},"31465146":{"x":-216,"y":-648,"type":"Door"},"31465147":{"x":-168,"y":-600,"type":"Door"},"31465148":{"x":-120,"y":-600,"type":"Door"},"31465152":{"x":-72,"y":-600,"type":"Door"},"31465153":{"x":-24,"y":-648,"type":"Door"},"31465154":{"x":-72,"y":-552,"type":"Wall"},"31465155":{"x":0,"y":-576,"type":"Harvester"},"31465156":{"x":24,"y":-648,"type":"SlowTrap"},"31465157":{"x":72,"y":-600,"type":"Wall"},"31465158":{"x":72,"y":-648,"type":"Door"},"31465159":{"x":120,"y":-600,"type":"Door"},"31465160":{"x":96,"y":-528,"type":"MagicTower"},"31465161":{"x":192,"y":-480,"type":"MagicTower"},"31465162":{"x":288,"y":-528,"type":"MagicTower"},"31465163":{"x":384,"y":-576,"type":"MagicTower"},"31465164":{"x":168,"y":-552,"type":"Door"},"31465165":{"x":216,"y":-552,"type":"Door"},"31465166":{"x":312,"y":-600,"type":"Wall"},"31465167":{"x":360,"y":-648,"type":"Wall"},"31465168":{"x":408,"y":-648,"type":"Wall"},"31465170":{"x":264,"y":-600,"type":"Door"},"31465171":{"x":312,"y":-648,"type":"Door"},"31465172":{"x":360,"y":-696,"type":"Door"},"31465173":{"x":408,"y":-696,"type":"Door"},"31465174":{"x":456,"y":-648,"type":"Door"},"31466967":{"x":504,"y":-648,"type":"Door"},"31467041":{"x":552,"y":-600,"type":"Door"},"31467357":{"x":600,"y":-552,"type":"Door"},"31467376":{"x":648,"y":-504,"type":"Door"},"31467398":{"x":456,"y":-600,"type":"Wall"},"31467400":{"x":504,"y":-600,"type":"Wall"},"31467423":{"x":96,"y":-432,"type":"CannonTower"},"31467424":{"x":192,"y":-384,"type":"CannonTower"},"31467425":{"x":288,"y":-432,"type":"CannonTower"},"31467426":{"x":384,"y":-480,"type":"CannonTower"},"31467427":{"x":480,"y":-528,"type":"CannonTower"},"31467428":{"x":552,"y":-552,"type":"Wall"},"31467429":{"x":552,"y":-504,"type":"Wall"},"31467430":{"x":600,"y":-504,"type":"Wall"},"31467431":{"x":576,"y":-432,"type":"MeleeTower"},"31467432":{"x":576,"y":-336,"type":"MeleeTower"},"31467433":{"x":576,"y":-240,"type":"MeleeTower"},"31467435":{"x":648,"y":-360,"type":"Wall"},"31467436":{"x":648,"y":-312,"type":"Wall"},"31467437":{"x":648,"y":-264,"type":"Wall"},"31467438":{"x":648,"y":-216,"type":"Wall"},"31467439":{"x":696,"y":-312,"type":"Wall"},"31467440":{"x":696,"y":-264,"type":"Wall"},"31467444":{"x":648,"y":-408,"type":"Door"},"31467454":{"x":696,"y":-360,"type":"Door"},"31467487":{"x":744,"y":-312,"type":"Door"},"31467488":{"x":744,"y":-264,"type":"Door"},"31467530":{"x":696,"y":-216,"type":"Door"},"31467531":{"x":648,"y":-168,"type":"Door"},"31467532":{"x":648,"y":-456,"type":"Door"},"31467533":{"x":600,"y":-168,"type":"Wall"},"31467534":{"x":600,"y":-120,"type":"Door"},"31467535":{"x":600,"y":-72,"type":"Door"},"31467536":{"x":648,"y":-24,"type":"Door"},"31467537":{"x":552,"y":-72,"type":"Wall"},"31467538":{"x":576,"y":0,"type":"Harvester"},"31467539":{"x":600,"y":72,"type":"Wall"},"31467540":{"x":648,"y":72,"type":"Door"},"31467541":{"x":600,"y":120,"type":"Door"},"31467542":{"x":648,"y":24,"type":"SlowTrap"},"31467543":{"x":552,"y":168,"type":"Wall"},"31467544":{"x":600,"y":168,"type":"Door"},"31467545":{"x":600,"y":216,"type":"Door"},"31467546":{"x":552,"y":216,"type":"Door"},"31467547":{"x":528,"y":96,"type":"MagicTower"},"31467548":{"x":480,"y":192,"type":"MagicTower"},"31467549":{"x":528,"y":-144,"type":"MagicTower"},"31467550":{"x":480,"y":-48,"type":"MagicTower"},"31467551":{"x":504,"y":24,"type":"SlowTrap"},"31467552":{"x":456,"y":24,"type":"SlowTrap"},"31467553":{"x":408,"y":24,"type":"SlowTrap"},"31467554":{"x":360,"y":24,"type":"SlowTrap"},"31467555":{"x":312,"y":24,"type":"SlowTrap"},"31467557":{"x":192,"y":0,"type":"Harvester"},"31467558":{"x":264,"y":24,"type":"SlowTrap"},"31467559":{"x":432,"y":-144,"type":"CannonTower"},"31467560":{"x":384,"y":-48,"type":"CannonTower"},"31467561":{"x":336,"y":-144,"type":"ArrowTower"},"31467564":{"x":288,"y":-48,"type":"BombTower"},"31467565":{"x":264,"y":-168,"type":"Wall"},"31467566":{"x":264,"y":-120,"type":"Wall"},"31467567":{"x":192,"y":-288,"type":"ArrowTower"},"31467568":{"x":96,"y":-336,"type":"ArrowTower"},"31467569":{"x":96,"y":-240,"type":"ArrowTower"},"31467570":{"x":192,"y":-192,"type":"BombTower"},"31467571":{"x":288,"y":-336,"type":"BombTower"},"31467572":{"x":384,"y":-384,"type":"BombTower"},"31467573":{"x":288,"y":-240,"type":"BombTower"},"31467574":{"x":384,"y":-240,"type":"BombTower"},"31467575":{"x":480,"y":-240,"type":"BombTower"},"31467576":{"x":360,"y":-312,"type":"Wall"},"31467577":{"x":408,"y":-312,"type":"Wall"},"31467578":{"x":480,"y":-432,"type":"ArrowTower"},"31467579":{"x":480,"y":-336,"type":"ArrowTower"},"31467580":{"x":24,"y":-504,"type":"SlowTrap"},"31467581":{"x":24,"y":-456,"type":"SlowTrap"},"31467582":{"x":24,"y":-408,"type":"SlowTrap"},"31467583":{"x":24,"y":-360,"type":"SlowTrap"},"31467584":{"x":24,"y":-312,"type":"SlowTrap"},"31467585":{"x":24,"y":-264,"type":"SlowTrap"},"31467586":{"x":432,"y":96,"type":"CannonTower"},"31467587":{"x":384,"y":192,"type":"CannonTower"},"31467588":{"x":336,"y":96,"type":"ArrowTower"},"31467589":{"x":240,"y":96,"type":"BombTower"},"31467590":{"x":288,"y":192,"type":"BombTower"},"31467591":{"x":72,"y":168,"type":"Door"},"31467592":{"x":120,"y":168,"type":"Door"},"31467593":{"x":120,"y":216,"type":"Door"},"31467594":{"x":72,"y":216,"type":"Door"},"31467595":{"x":120,"y":264,"type":"Door"},"31467596":{"x":168,"y":264,"type":"Door"},"31467597":{"x":216,"y":264,"type":"Door"},"31467598":{"x":264,"y":264,"type":"Door"},"31467599":{"x":264,"y":312,"type":"Door"},"31467600":{"x":312,"y":264,"type":"Wall"},"31467601":{"x":360,"y":264,"type":"Wall"},"31467602":{"x":360,"y":312,"type":"Wall"},"31467603":{"x":312,"y":312,"type":"Door"},"31467605":{"x":216,"y":312,"type":"Wall"},"31467892":{"x":432,"y":288,"type":"BombTower"},"31468056":{"x":528,"y":288,"type":"MagicTower"},"31468462":{"x":600,"y":264,"type":"Door"},"31468615":{"x":648,"y":264,"type":"Door"},"31469347":{"x":696,"y":360,"type":"Door"},"31469452":{"x":696,"y":312,"type":"Door"},"31469628":{"x":648,"y":408,"type":"Door"},"31469736":{"x":600,"y":456,"type":"Door"},"31469758":{"x":552,"y":504,"type":"Door"},"31470698":{"x":456,"y":600,"type":"Door"},"31470903":{"x":504,"y":552,"type":"Wall"},"31470965":{"x":408,"y":648,"type":"Door"},"31470998":{"x":360,"y":696,"type":"Door"},"31471010":{"x":312,"y":744,"type":"Door"},"31471011":{"x":264,"y":744,"type":"Door"},"31471012":{"x":216,"y":696,"type":"Door"},"31471013":{"x":600,"y":312,"type":"Wall"},"31471014":{"x":648,"y":312,"type":"Wall"},"31471015":{"x":648,"y":360,"type":"Wall"},"31471016":{"x":600,"y":360,"type":"Wall"},"31471017":{"x":504,"y":360,"type":"Wall"},"31471018":{"x":552,"y":360,"type":"Wall"},"31471019":{"x":552,"y":408,"type":"Wall"},"31471020":{"x":552,"y":456,"type":"Wall"},"31471021":{"x":504,"y":456,"type":"Wall"},"31471022":{"x":600,"y":408,"type":"Wall"},"31471023":{"x":504,"y":408,"type":"Door"},"31471024":{"x":264,"y":696,"type":"Wall"},"31471025":{"x":312,"y":696,"type":"Wall"},"31471026":{"x":312,"y":648,"type":"Wall"},"31471027":{"x":264,"y":648,"type":"Wall"},"31471028":{"x":216,"y":648,"type":"Wall"},"31471029":{"x":360,"y":648,"type":"Wall"},"31471030":{"x":312,"y":600,"type":"Wall"},"31471031":{"x":312,"y":552,"type":"Wall"},"31471032":{"x":360,"y":600,"type":"Wall"},"31471033":{"x":408,"y":600,"type":"Wall"},"31471034":{"x":408,"y":552,"type":"Wall"},"31471035":{"x":504,"y":504,"type":"Door"},"31471036":{"x":456,"y":504,"type":"Door"},"31471037":{"x":456,"y":552,"type":"Door"},"31471038":{"x":360,"y":552,"type":"Door"},"31471039":{"x":360,"y":504,"type":"Door"},"31471040":{"x":408,"y":504,"type":"Door"},"31471041":{"x":456,"y":456,"type":"Door"},"31471044":{"x":384,"y":432,"type":"ArrowTower"},"31471045":{"x":312,"y":360,"type":"Door"},"31471046":{"x":312,"y":408,"type":"Door"},"31471047":{"x":312,"y":456,"type":"Door"},"31471048":{"x":312,"y":504,"type":"Door"},"31471049":{"x":360,"y":360,"type":"Door"},"31471050":{"x":408,"y":360,"type":"Door"},"31471051":{"x":456,"y":360,"type":"Door"},"31471052":{"x":456,"y":408,"type":"Door"},"31471053":{"x":168,"y":600,"type":"Wall"},"31471054":{"x":168,"y":648,"type":"Door"},"31471055":{"x":120,"y":600,"type":"Door"},"31471056":{"x":72,"y":648,"type":"Door"},"31471057":{"x":24,"y":648,"type":"Wall"},"31471058":{"x":24,"y":696,"type":"Door"},"31471059":{"x":240,"y":576,"type":"MagicTower"},"31471060":{"x":144,"y":528,"type":"MagicTower"},"31471061":{"x":48,"y":576,"type":"MagicTower"},"31471062":{"x":144,"y":432,"type":"CannonTower"},"31471063":{"x":48,"y":480,"type":"CannonTower"},"31471064":{"x":48,"y":384,"type":"ArrowTower"},"31471066":{"x":-96,"y":432,"type":"CannonTower"},"31471067":{"x":-96,"y":528,"type":"MagicTower"},"31471068":{"x":48,"y":288,"type":"BombTower"},"31471069":{"x":144,"y":336,"type":"BombTower"},"31471070":{"x":240,"y":384,"type":"BombTower"},"31471071":{"x":240,"y":480,"type":"BombTower"},"31471072":{"x":-264,"y":216,"type":"Wall"},"31471073":{"x":-264,"y":264,"type":"Wall"},"31471074":{"x":-96,"y":336,"type":"ArrowTower"},"31471075":{"x":-192,"y":384,"type":"ArrowTower"},"31471076":{"x":-192,"y":480,"type":"MagicTower"},"31471077":{"x":-216,"y":552,"type":"Wall"},"31471078":{"x":-168,"y":552,"type":"Wall"},"31471079":{"x":-120,"y":600,"type":"Wall"},"31471080":{"x":-48,"y":624,"type":"Harvester"},"31471090":{"x":-72,"y":696,"type":"Door"},"31471115":{"x":-120,"y":648,"type":"Door"},"31471119":{"x":-216,"y":600,"type":"Door"},"31471123":{"x":-168,"y":600,"type":"Door"},"31471124":{"x":-24,"y":696,"type":"SlowTrap"},"31471128":{"x":-264,"y":600,"type":"Wall"},"31471129":{"x":-312,"y":600,"type":"Wall"},"31471130":{"x":-360,"y":600,"type":"Wall"},"31471131":{"x":-408,"y":600,"type":"Wall"},"31471132":{"x":-360,"y":648,"type":"Wall"},"31471133":{"x":-312,"y":648,"type":"Wall"},"31471134":{"x":-264,"y":648,"type":"Door"},"31471135":{"x":-312,"y":696,"type":"Door"},"31471136":{"x":-360,"y":696,"type":"Door"},"31471137":{"x":-408,"y":648,"type":"Door"},"31471138":{"x":-456,"y":600,"type":"Door"},"31471177":{"x":-456,"y":552,"type":"Wall"},"31471178":{"x":-456,"y":504,"type":"Wall"},"31471179":{"x":-504,"y":504,"type":"Wall"},"31471180":{"x":-384,"y":528,"type":"MeleeTower"},"31471181":{"x":-288,"y":528,"type":"MeleeTower"},"31471375":{"x":-504,"y":552,"type":"Door"},"31471459":{"x":-552,"y":504,"type":"Door"},"31472550":{"x":-600,"y":456,"type":"Door"},"31473067":{"x":-600,"y":408,"type":"Wall"},"31473180":{"x":-648,"y":408,"type":"Door"},"31473706":{"x":-648,"y":360,"type":"Wall"},"31473775":{"x":-648,"y":312,"type":"Wall"},"31474138":{"x":-696,"y":312,"type":"Door"},"31474172":{"x":-696,"y":360,"type":"Door"},"31474551":{"x":-576,"y":336,"type":"MagicTower"},"31475047":{"x":-480,"y":336,"type":"ArrowTower"},"31475122":{"x":-528,"y":432,"type":"ArrowTower"},"31475754":{"x":-360,"y":408,"type":"Wall"},"31475761":{"x":-360,"y":456,"type":"Wall"},"31475847":{"x":-432,"y":432,"type":"BombTower"},"31475861":{"x":-384,"y":336,"type":"BombTower"},"31475869":{"x":-288,"y":336,"type":"BombTower"},"31475881":{"x":-288,"y":432,"type":"BombTower"},"31475918":{"x":-24,"y":264,"type":"SlowTrap"},"31475919":{"x":-24,"y":312,"type":"SlowTrap"},"31475921":{"x":-24,"y":360,"type":"SlowTrap"},"31475922":{"x":-24,"y":408,"type":"SlowTrap"},"31475923":{"x":-24,"y":456,"type":"SlowTrap"},"31475924":{"x":-24,"y":504,"type":"SlowTrap"},"31475928":{"x":-24,"y":552,"type":"SlowTrap"}}');
-const items = Object.values(data);
-let n = 0;
-for (const b of items) {
-  game.network.sendRpc({ name: 'MakeBuilding', type: b.type, x: gs.x + b.x, y: gs.y + b.y, yaw: 0 });
-  n++;
-}
-ctx.toast('Build Plus Base: queued ' + n + ' buildings');`),
+const items = Object.values(data).map((b) => ({ type: b.type, x: gs.x + b.x, y: gs.y + b.y, yaw: 0 }));
+// Continuous build: ~500 buildings span far beyond the 576u build range,
+// so the layout fills in as you walk the footprint. The glass HUD shows
+// progress; Enter finishes, Esc cancels.
+if (window.AxiomBuild) {
+  ctx.ui.closePanel && ctx.ui.closePanel();
+  window.AxiomBuild.continuous(items, { name: 'Plus Base' });
+} else {
+  for (const b of items) game.network.sendRpc({ name: 'MakeBuilding', ...b });
+  ctx.toast('Build Plus Base: queued ' + items.length + ' buildings');
+}`),
 
   scr_basesaver: scr("scr_basesaver", "Base Saver",
     `const KEY_DATA = 'axiom.baseSaver.data';
@@ -1118,6 +1129,12 @@ const savePins = () => localStorage.setItem(KEY_PINS, JSON.stringify(S.pins));
 const getCtrl  = (id) => window.AxiomPanel?.controlNodes?.get(id)?.widget;
 const getStash = () => Object.values(game?.ui?.buildings || {}).find(b => b.type === 'GoldStash');
 const simplify = (s) => s.replace(/[^a-zA-Z0-9_-]+/g, '');
+// Parse a saved baseString into absolute build items for the given stash.
+const layoutItems = (entry, stash) => entry.baseString.split(';')
+  .map((s) => s.split(','))
+  .filter((p) => p[0])
+  .map((p) => ({ type: TOWERS[+p[0]], x: stash.x - +p[1], y: stash.y - +p[2], yaw: +p[3] || 0 }))
+  .filter((t) => t.type);
 
 // Always track mouse — overlay needs current screen position.
 if (!S._mouseHook) {
@@ -1221,12 +1238,17 @@ const startOverlay = (id) => {
       if (e.target.id !== 'hud') return;
       if (e.button === 0) {
         const r = quantize();
-        for (const gh of S.overlay.ghosts) {
-          game.network.sendRpc({ name: 'MakeBuilding', type: gh.model,
-            x: r.x + gh.dx, y: r.y + gh.dy, yaw: gh.yaw });
-        }
+        const items = S.overlay.ghosts.map((gh) =>
+          ({ type: gh.model, x: r.x + gh.dx, y: r.y + gh.dy, yaw: gh.yaw }));
         stopOverlay();
-        ctx.toast('Base built');
+        // Commit via the continuous builder — anything beyond build
+        // range goes down as the player walks the footprint.
+        if (window.AxiomBuild) {
+          window.AxiomBuild.continuous(items, { name: 'preview layout' });
+        } else {
+          for (const it of items) game.network.sendRpc({ name: 'MakeBuilding', ...it });
+          ctx.toast('Base built');
+        }
       } else if (e.button === 2) {
         stopOverlay();
         ctx.toast('Overlay cancelled');
@@ -1275,18 +1297,23 @@ else if (controlId === 'bs-build') {
   const id = selId(); if (!id || !S.data[id]) { ctx.toast('Select a base'); return; }
   if (!getStash()) { ctx.toast('Need a GoldStash first'); return; }
   const stash = getStash();
-  let n = 0;
-  for (const s of S.data[id].baseString.split(';')) {
-    const p = s.split(','); if (!p[0]) continue;
-    game.network.sendRpc({ name: 'MakeBuilding', type: TOWERS[+p[0]],
-      x: stash.x - +p[1], y: stash.y - +p[2], yaw: +p[3] });
-    n++;
+  const items = layoutItems(S.data[id], stash);
+  // Continuous build: the panel closes and the layout fills in around
+  // you as you walk (server range-gates placement). Enter finishes.
+  if (window.AxiomBuild) {
+    ctx.ui.closePanel && ctx.ui.closePanel();
+    window.AxiomBuild.continuous(items, { name: S.data[id].name });
+  } else {
+    for (const it of items) game.network.sendRpc({ name: 'MakeBuilding', ...it });
+    ctx.toast('Building "' + S.data[id].name + '" (' + items.length + ' parts)');
   }
-  ctx.toast('Building "' + S.data[id].name + '" (' + n + ' parts)');
 }
 
 else if (controlId === 'bs-preview') {
   const id = selId(); if (!id || !S.data[id]) { ctx.toast('Select a base'); return; }
+  // The ghost follows the mouse over the WORLD — get the panel out of
+  // the way so the user can position and click immediately.
+  ctx.ui.closePanel && ctx.ui.closePanel();
   startOverlay(id);
   ctx.toast('Preview "' + S.data[id].name + '" — LClick build · RClick cancel');
 }
@@ -1341,12 +1368,14 @@ else if (controlId === 'bs-pin1' || controlId === 'bs-pin2' || controlId === 'bs
   if (!id || !S.data[id]) { ctx.toast('Pin slot empty'); return; }
   if (!getStash()) { ctx.toast('Need a GoldStash first'); return; }
   const stash = getStash();
-  for (const s of S.data[id].baseString.split(';')) {
-    const p = s.split(','); if (!p[0]) continue;
-    game.network.sendRpc({ name: 'MakeBuilding', type: TOWERS[+p[0]],
-      x: stash.x - +p[1], y: stash.y - +p[2], yaw: +p[3] });
+  const items = layoutItems(S.data[id], stash);
+  if (window.AxiomBuild) {
+    ctx.ui.closePanel && ctx.ui.closePanel();
+    window.AxiomBuild.continuous(items, { name: S.data[id].name });
+  } else {
+    for (const it of items) game.network.sendRpc({ name: 'MakeBuilding', ...it });
+    ctx.toast('Built pin: ' + S.data[id].name);
   }
-  ctx.toast('Built pin: ' + S.data[id].name);
 }
 
 else if (controlId === 'bs-unpin') {
@@ -1357,7 +1386,7 @@ else if (controlId === 'bs-unpin') {
 };
 
 const DEFAULT_SCHEMA = {
-  schemaVersion: 22,
+  schemaVersion: 23,
   meta: {
     name: "Axiom",
     version: "0.1.0",
@@ -1432,7 +1461,7 @@ const DEFAULT_SCHEMA = {
           id: "build-place", name: "Placement", collapsible: true, defaultOpen: true,
           controls: [
             { type: "button", id: "build-wallblock", label: "Place wall ring", scriptId: "scr_wallblock",
-              tooltip: "Drops a ring of walls around your gold stash at the configured radius." },
+              tooltip: "Continuously places a ring of walls around your gold stash at the configured radius — walk the ring to fill it. Enter finishes." },
             { type: "slider", id: "build-wall-radius", label: "Ring radius (tiles)",
               defaultValue: 3, min: 1, max: 9, step: 1 },
             { type: "toggle", id: "build-autobuild", label: "Auto Builder", scriptId: "scr_autobuild",
@@ -1456,9 +1485,10 @@ const DEFAULT_SCHEMA = {
               defaultValue: "", dynamicOptions: "axiom.baseSaver.data",
               options: [{ value: "", label: "(no saved bases)" }] },
             { type: "row", id: "bs-row-actions", controls: [
-              { type: "button", id: "bs-build",         label: "Build",          scriptId: "scr_basesaver" },
+              { type: "button", id: "bs-build",         label: "Build",          scriptId: "scr_basesaver",
+                tooltip: "Continuous build around your GoldStash: the panel closes and the layout fills in as you walk the footprint. Enter finishes, Esc cancels." },
               { type: "button", id: "bs-preview",       label: "Preview",        scriptId: "scr_basesaver",
-                tooltip: "Ghost-overlay the layout under your cursor. L-click commits, R-click cancels." },
+                tooltip: "Ghost-overlay the layout under your cursor. L-click commits (continuous build), R-click cancels." },
               { type: "button", id: "bs-clear-overlay", label: "Clear",          scriptId: "scr_basesaver" },
             ]},
             { type: "row", id: "bs-row-manage", controls: [
@@ -1488,7 +1518,7 @@ const DEFAULT_SCHEMA = {
             { type: "text", id: "bs-prebuilt-info",
               defaultValue: "One-click full base layouts placed relative to your GoldStash." },
             { type: "button", id: "bs-plusbase", label: "Build Plus Base", scriptId: "scr_buildPlusBase",
-              tooltip: "Places the full Plus-shaped base (~500 buildings) around the GoldStash." },
+              tooltip: "Continuously places the full Plus-shaped base (~500 buildings) around the GoldStash as you walk the footprint. Enter finishes." },
           ],
         },
       ],
