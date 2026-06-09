@@ -84,12 +84,24 @@ function farmThresholds(ecoMin, restMax) {
 }
 
 const UPGRADE_COOLDOWN_MS = 1800;   // per-building, until LocalBuilding confirms
-// A session must be within this distance of a building to upgrade it
-// (the zombs.io server rejects out-of-range build actions). Generous
-// enough that any bot standing in the base counts as "in range", while a
-// bot out at a distant farm does not — so we know when to send one over.
-const UPGRADE_RANGE = 600;
-const UPGRADE_MOVE_COOLDOWN_MS = 3000;   // re-dispatch throttle for movers
+// A session must be within this distance of a building to upgrade it.
+// The zombs.io server enforces maxPlayerDistance = 12 cells = 576 units
+// (wiki 10 §B1 / 12 §1) and silently no-ops anything farther. Stay UNDER
+// 576 with a margin for position lag — the old value of 600 made the
+// coordinator believe a bot at ~580u could fire, so the upgrade silently
+// failed forever and nobody was ever dispatched.
+const UPGRADE_RANGE = 550;
+const UPGRADE_MOVE_COOLDOWN_MS = 6000;   // re-dispatch throttle for movers
+// How long a dispatched bot is shielded from the farm logic. Must exceed
+// a worst-case base↔farm walk: with the old 8 s shield the farm block
+// re-captured the bot mid-trip ("wood is low → go farm"), then the
+// dispatcher recalled it 3 s later — the mid-field ping-pong the wiki
+// warns about (12 §4). Cleared early the moment the bot fires an upgrade.
+const DISPATCH_SHIELD_MS = 45000;
+// Once a bot commits to a farm trip it stays committed at least this long
+// before the dispatcher may pull it back for an upgrade (wiki 12 §4
+// "min-farm-dwell" anti-thrash rule).
+const FARM_MIN_DWELL_MS = 30000;
 // Pickaxe: each farming session upgrades its pickaxe toward this tier
 // (faster wood/stone gathering) — only when the math says it's worth it.
 //
@@ -215,12 +227,17 @@ function createCoordinator({ getBots, sendToUser }) {
       }
     } else {
       c.parties.delete(partyId);
-      // Release any bots in THIS party that the coordinator sent to farm.
+      // Release any bots in THIS party that the coordinator sent to farm
+      // or dispatched on an upgrade errand — clear all coordinator state.
       for (const bot of getBots()) {
-        if (bot._userId === userId && bot._coordFarming &&
+        if (bot._userId === userId &&
             bot.myPlayer && bot.myPlayer.partyId === partyId) {
-          bot._coordFarming = false;
-          bot.setNavActive(false);
+          bot._upgradeMoveUntil = 0;
+          bot._farmCommitUntil = 0;
+          if (bot._coordFarming || bot.navErrand) {
+            bot._coordFarming = false;
+            bot.setNavActive(false);
+          }
         }
       }
     }
@@ -294,6 +311,7 @@ function createCoordinator({ getBots, sendToUser }) {
   // tick doesn't over-assign before the real material update lands).
   function pickUpgrade(buildings, group, aheadBy, localMats, now) {
     const { ecoMin, restMax } = tierStats(buildings);
+    const { ceil: FULL_STOCK } = farmThresholds(ecoMin, restMax);
 
     // Build candidate list: upgradeable, off-cooldown buildings, each
     // tagged with its priority class.
@@ -332,7 +350,7 @@ function createCoordinator({ getBots, sendToUser }) {
       const bx = cand.b.x, by = cand.b.y;
       const hasPos = Number.isFinite(bx) && Number.isFinite(by);
       let inBest = null, inBestGold = Infinity;
-      let moveBest = null, moveBestDist = Infinity;
+      let moveBest = null, moveBestDist = Infinity, moveBestFarming = 2;
       for (const bot of group) {
         const m = localMats.get(bot.id);
         if (!m || !canAfford(m, cand.cost)) continue;
@@ -340,8 +358,26 @@ function createCoordinator({ getBots, sendToUser }) {
         const dist = (hasPos && p) ? Math.hypot(p.x - bx, p.y - by) : 0;
         if (!hasPos || dist <= UPGRADE_RANGE) {
           if (m.gold < inBestGold) { inBestGold = m.gold; inBest = bot; }
+          continue;
         }
-        if (dist < moveBestDist) { moveBestDist = dist; moveBest = bot; }
+        // Mover candidates (anti ping-pong — wiki 12 §4):
+        //   • a farming bot inside its min-dwell is NEVER pulled;
+        //   • past dwell it's pulled only for an ECONOMY upgrade or once
+        //     its stockpile is full (its farm trip is done anyway);
+        //   • non-farming bots always beat farming ones, then by distance.
+        // Anything that can't be funded in-range right now simply waits —
+        // it gets fired in a burst when a stocked bot walks home.
+        const farming = bot._coordFarming ? 1 : 0;
+        if (farming) {
+          if (now < (bot._farmCommitUntil || 0)) continue;
+          const wp = bot.myPlayer;
+          const full = (wp.wood || 0) >= FULL_STOCK && (wp.stone || 0) >= FULL_STOCK;
+          if (!cand.isEco && !full) continue;
+        }
+        if (farming < moveBestFarming ||
+            (farming === moveBestFarming && dist < moveBestDist)) {
+          moveBestFarming = farming; moveBestDist = dist; moveBest = bot;
+        }
       }
       if (inBest) {
         return { building: cand.b, cost: cand.cost, session: inBest, isEco: cand.isEco, needsMove: false };
@@ -371,9 +407,24 @@ function createCoordinator({ getBots, sendToUser }) {
       if (bot.setNavActive) bot.setNavActive(false);   // walk to the base anchor
     } else {
       if (bot.isNight && bot.isNight()) return;          // don't leave at night
-      if (bot.gotoPoint) bot.gotoPoint(bx, by);
+      // Walk to an APPROACH point short of the building, never its centre:
+      // a 2×2 footprint is solid, so the centre tile is unreachable and the
+      // bot would jitter at the wall (wiki 12 §2). Stopping ~150u out keeps
+      // it comfortably inside the 576u upgrade range. errandTo (unlike the
+      // old gotoPoint) does NOT re-anchor the bot's home to the building —
+      // that hijack made later "return to base" trips go to the wrong spot.
+      const p = bot.myPlayer && bot.myPlayer.position;
+      const dx = p ? p.x - bx : 0, dy = p ? p.y - by : 0;
+      const d = Math.hypot(dx, dy) || 1;
+      const ax = bx + (dx / d) * 150, ay = by + (dy / d) * 150;
+      bot._coordFarming = false;
+      if (bot.errandTo) bot.errandTo(ax, ay);
+      else if (bot.gotoPoint) bot.gotoPoint(ax, ay);
     }
-    bot._upgradeMoveUntil = now + 8000;
+    // Shield the bot from the farm logic for the WHOLE trip (cleared the
+    // moment it fires an upgrade). The old 8 s shield expired mid-walk and
+    // the farm block yanked the bot straight back out — the back-and-forth.
+    bot._upgradeMoveUntil = now + DISPATCH_SHIELD_MS;
     lastMoveAt.set(bot.id, now);
   }
 
@@ -414,6 +465,9 @@ function createCoordinator({ getBots, sendToUser }) {
         const pos = p.position;
         const d = pos ? Math.hypot(pos.x - rec.x, pos.y - rec.y) : Infinity;
         if (d <= UPGRADE_RANGE && !placer) placer = bot;
+        // Same min-dwell rule as pickUpgrade: don't yank a bot that just
+        // committed to a farm trip to walk back for a rebuild.
+        if (bot._coordFarming && now < (bot._farmCommitUntil || 0)) continue;
         if (d < moverD) { moverD = d; mover = bot; }
       }
       if (placer) {
@@ -499,6 +553,17 @@ function createCoordinator({ getBots, sendToUser }) {
         catch {}
         lastUpgradeAt.set(pick.building.uid, now);
 
+        // Dispatch resolved: the session fired, so drop its move shield and,
+        // if it was out on a walking errand, recall it to the base anchor —
+        // never leave a bot idling next to a remote building overnight.
+        if (pick.session._upgradeMoveUntil) {
+          pick.session._upgradeMoveUntil = 0;
+          if (pick.session.navErrand) {
+            pick.session.returnToBase = true;
+            if (pick.session.setNavActive) pick.session.setNavActive(false);
+          }
+        }
+
         // Deduct locally + optimistically bump tier so the next
         // iteration plans against the post-upgrade state.
         const m = localMats.get(pick.session.id);
@@ -529,13 +594,13 @@ function createCoordinator({ getBots, sendToUser }) {
       // ── Retreat-to-farm integration ──
       // "While saving up gold, retreat to the farm location" and
       // "if a bot is low on materials, go back to farming".
-      //   saving  = there are upgradeable buildings but the group fired
-      //             nothing this tick (can't afford the next priority).
-      //   botLow  = this bot can't afford the cheapest pending upgrade
-      //             in the current priority pool.
-      // A bot with a farmSpot is sent to farm when saving OR botLow, and
-      // recalled (nav off) once it's flush again. Hysteresis via the
-      // bot._coordFarming flag prevents per-tick thrash.
+      //   saving = nobody in the group can afford the PRIORITY-HEAD
+      //            upgrade (the one pickUpgrade wants to fund next).
+      // A bot with a farmSpot is sent to farm when saving OR low on
+      // wood/stone, and recalled (nav off) once it's flush again.
+      // Hysteresis via the bot._coordFarming flag prevents per-tick
+      // thrash; _farmCommitUntil (min-dwell) keeps the dispatcher from
+      // yanking it back mid-trip.
       // Hysteresis on FARMABLE materials (wood + stone). Gold comes from
       // mines passively and is spent remotely, so it's a bad trigger —
       // using it caused the farm↔base thrash (bot returned the instant it
@@ -544,6 +609,7 @@ function createCoordinator({ getBots, sendToUser }) {
       //   return only once BOTH are above FARM_CEIL (a full stockpile)
       // The wide floor→ceil band means one long farm trip, not a loop.
       // Thresholds SCALE with the base level (see farmThresholds).
+      let savingState = false;   // surfaced on the dashboard status
       if (resting) {
         // Base fully maxed and the user chose an end behaviour:
         //   stop → stop farming, idle in place
@@ -561,30 +627,40 @@ function createCoordinator({ getBots, sendToUser }) {
         const { floor: FARM_FLOOR, ceil: FARM_CEIL } = farmThresholds(ecoMin, restMax);
 
         // "saving" = there's a pending upgrade but NO bot can afford the
-        // cheapest one (e.g. saving 100k/400k gold for a stash tier). When
-        // that's sustained, all farm-spot bots gather rather than idle at
-        // base — the wood/stone they bank funds towers the moment the gap
-        // opens. Upgrades still fire remotely from whichever bot has the
-        // gold, so a bot is always "available" to upgrade the instant it
-        // can. Debounced so it doesn't flip per tick.
-        let cheapest = null;
+        // PRIORITY HEAD — the upgrade pickUpgrade would fund next (economy
+        // first, then the gap-capped rest), chosen with the same ordering.
+        // It must NOT be anchored on the globally-cheapest building (the
+        // old code): that included gap-capped walls the picker would never
+        // fire, and flipped sign every time passive mine income crossed a
+        // cheap price — each flip yanked farm bots home for one click and
+        // sent them straight back out. This is the farm↔base ping-pong the
+        // wiki calls out (12 §4 "economy-anchored saving"). Debounced so a
+        // single tick can't flip the group state.
+        let head = null;
         for (const b of buildings) {
           if (b.tier >= MAX_TIER) continue;
+          const cls = classOf(b.type, b.tier, ecoMin, restMax, cfg.aheadBy);
+          if (cls === 99) continue;                  // gap-capped → never the target
           const c = upgradeCost(b.type, b.tier);
           if (!c) continue;
-          if (!cheapest || c.gold < cheapest.gold) cheapest = c;
+          if (!head || cls < head.cls ||
+              (cls === head.cls && (b.tier < head.tier ||
+                (b.tier === head.tier && c.gold < head.cost.gold)))) {
+            head = { cls, tier: b.tier, cost: c };
+          }
         }
-        const anyAfford = cheapest && group.some((bot) => {
+        const anyAfford = head && group.some((bot) => {
           const p = bot.myPlayer;
-          return canAfford({ gold: p.gold||0, wood: p.wood||0, stone: p.stone||0, token: p.token||0 }, cheapest);
+          return canAfford({ gold: p.gold||0, wood: p.wood||0, stone: p.stone||0, token: p.token||0 }, head.cost);
         });
-        const savingNow = !!cheapest && !anyAfford;
+        const savingNow = !!head && !anyAfford;
         if (savingNow) {
           if (!savingSince.has(partyId)) savingSince.set(partyId, now);
         } else {
           savingSince.delete(partyId);
         }
         const saving = savingNow && (now - (savingSince.get(partyId) || now) > 1500);
+        savingState = saving;
 
         for (const bot of group) {
           if (!bot.farmSpot) continue;          // only manage bots with a spot
@@ -597,6 +673,9 @@ function createCoordinator({ getBots, sendToUser }) {
             // Start farming when low on materials OR the group is saving.
             if (saving || wood < FARM_FLOOR || stone < FARM_FLOOR) {
               bot._coordFarming = true;
+              // Min-dwell: once committed, the dispatcher may not pull this
+              // bot back for an upgrade until the dwell elapses (12 §4).
+              bot._farmCommitUntil = now + FARM_MIN_DWELL_MS;
               bot.setNavActive(true);
             }
           } else {
@@ -623,6 +702,7 @@ function createCoordinator({ getBots, sendToUser }) {
         members: group.length,
         enabled: true,
         ecoMin: ts.ecoMin, restMax: ts.restMax,
+        saving: savingState,
         farmFloor: farmGoal.floor, farmCeil: farmGoal.ceil,
         buildings: buildings.length,
         summary,

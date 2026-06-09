@@ -133,6 +133,10 @@ class Bot extends EventEmitter {
     // positioning the bot where they want it and starting smart upgrade.
     // Takes priority over the GoldStash / spawn fallback in _homePoint().
     this.navBase = null;
+    // navErrand: {x,y} — a TEMPORARY walk target (smart-upgrade fetching
+    // the bot to a building). Unlike gotoPoint it does NOT re-anchor
+    // navBase; cleared on arrival or when any other intent takes over.
+    this.navErrand = null;
     // When farming is turned OFF, return to base ONLY if this is set —
     // which Smart Farm Setup does. Otherwise the bot just stops where it
     // is (the user doesn't want every farm-disable to trek home).
@@ -208,6 +212,21 @@ class Bot extends EventEmitter {
   gotoPoint(x, y) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) return;
     this.navBase = { x: Math.round(x), y: Math.round(y) };
+    this.navErrand = null;
+    this.navIntent = "idle";
+    this.navReturning = true;
+    this.navPath = null; this.navIndex = 0; this.navArrived = false;
+    this.navStatus = "returning";
+  }
+
+  // Temporary errand: walk to a point WITHOUT re-anchoring navBase (unlike
+  // gotoPoint, which makes the point the bot's new home). Used by the
+  // smart-upgrade coordinator to fetch a bot to an out-of-base building —
+  // the bot's home stays the user's base anchor, so later recalls still
+  // return it to the base instead of the building.
+  errandTo(x, y) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    this.navErrand = { x: Math.round(x), y: Math.round(y) };
     this.navIntent = "idle";
     this.navReturning = true;
     this.navPath = null; this.navIndex = 0; this.navArrived = false;
@@ -246,6 +265,7 @@ class Bot extends EventEmitter {
   // position as "home" the first time). on=false → return to home, then
   // settle idle.
   setNavActive(on) {
+    this.navErrand = null;   // any explicit intent change cancels an errand
     if (on) {
       this.navIntent = "farm";
       this.navReturning = false;
@@ -412,6 +432,7 @@ class Bot extends EventEmitter {
     // session's STARTING position at the first entity tick (see
     // _onEntityUpdate). This is the spot the bot returns to.
     this.navHome = null;
+    this.navErrand = null;
     this.navReturning = false;
     this._captureHome = true;
     // MBF continuation — bot already computed opcode 6, send it now.
@@ -935,7 +956,9 @@ class Bot extends EventEmitter {
     const FARM_ZONE = 120;    // start farming within this of the spot (forgiving)
     const WP_REACH = 40;      // advance to next waypoint within this distance
 
-    const home = this._homePoint();
+    // A pending errand (smart-upgrade fetching us to a building) overrides
+    // the base anchor as the "idle" destination — navBase itself unchanged.
+    const home = this.navErrand || this._homePoint();
     // Farm target = the configured spot PLUS this bot's coordination slot
     // offset, so multiple party bots fan out around the same tree/stone
     // instead of stacking on one pixel (see assignFarmSlots). Angle is
@@ -1007,6 +1030,7 @@ class Bot extends EventEmitter {
     // ── Home arrival ──
     if (!desiredIsFarm && distDesired <= ARRIVE) {
       this.navArrived = false;
+      this.navErrand = null;   // errand (if any) completed
       this.stopMoving(true);   // release keys + mouse
       this.navPath = null;
       this.navStatus = "home";
