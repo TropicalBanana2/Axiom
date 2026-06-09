@@ -416,7 +416,7 @@ function createCoordinator({ getBots, sendToUser }) {
   //
   // localMats: per-session mutable material copy (so a burst within one
   // tick doesn't over-assign before the real material update lands).
-  function pickUpgrade(buildings, group, aheadBy, localMats, now) {
+  function pickUpgrade(buildings, group, aheadBy, localMats, now, reserve) {
     const { ecoMin, restMax } = tierStats(buildings);
     const { ceil: FULL_STOCK } = farmThresholds(ecoMin, restMax);
 
@@ -461,6 +461,13 @@ function createCoordinator({ getBots, sendToUser }) {
       for (const bot of group) {
         const m = localMats.get(bot.id);
         if (!m || !canAfford(m, cand.cost)) continue;
+        // Gold reservation: the designated saver's gold is earmarked for
+        // the next economy upgrade (the 100k/400k stash tiers etc.). It
+        // may only pay for OTHER buildings if doing so still leaves the
+        // FULL economy cost untouched — so its pile only ever grows
+        // toward the stash, and the stash is bought the moment it can be.
+        if (reserve && bot.id === reserve.saverId && cand.b.uid !== reserve.uid &&
+            (m.gold - cand.cost.gold) < reserve.gold) continue;
         const p = bot.myPlayer && bot.myPlayer.position;
         const dist = (hasPos && p) ? Math.hypot(p.x - bx, p.y - by) : 0;
         if (!hasPos || dist <= UPGRADE_RANGE) {
@@ -645,7 +652,7 @@ function createCoordinator({ getBots, sendToUser }) {
   // Place up to FARM_HARV_MAX harvesters around the farm centre, then feed
   // each one gold and collect its wood/stone from whichever bot is nearest —
   // converting surplus gold into materials on site. Needs a base (GoldStash).
-  function farmHarvestPass(group, buildings, now, actions) {
+  function farmHarvestPass(group, buildings, now, actions, saverId) {
     const centre = farmCentre(group);
     if (!centre) return;
     if (!buildings.some((b) => b.type === "GoldStash")) return;   // need a base to build
@@ -685,11 +692,15 @@ function createCoordinator({ getBots, sendToUser }) {
       }
     }
 
-    // Distributed feed + collect — nearest in-range bot services each harvester.
+    // Distributed feed + collect — nearest in-range bot services each
+    // harvester. The designated SAVER never feeds: its gold is earmarked
+    // for the next stash/mine tier and a 50-gold drip per feed would
+    // meaningfully delay a 100k/400k save.
     for (const h of farmHarv) {
       if (now - (lastHarvFeedAt.get(h.uid) || 0) < FARM_HARV_FEED_CD) continue;
       let best = null, bestD = Infinity;
       for (const bot of group) {
+        if (saverId && bot.id === saverId) continue;   // saver's gold is reserved
         const p = bot.myPlayer; if (!p || !p.position) continue;
         const d = Math.hypot(p.position.x - h.x, p.position.y - h.y);
         if (d <= UPGRADE_RANGE && d < bestD) { bestD = d; best = bot; }
@@ -743,18 +754,44 @@ function createCoordinator({ getBots, sendToUser }) {
         continue;
       }
 
-      // Buy better pickaxes for FARMING bots (uses each bot's own gold).
-      // Willingness scales with the top GoldMine tier (emerald → max), but the
-      // next GoldStash upgrade's gold is always reserved first.
-      let mineTier = 0, stashReserve = 0;
+      // ── Next economy step + designated saver ──
+      // Materials are per-player and CANNOT be pooled, so one single
+      // wallet has to accumulate the full stash/mine cost (100k for the
+      // tier-7 stash, 400k for tier-8). We designate the richest bot as
+      // the SAVER: its gold is reserved for the economy target — the
+      // picker won't spend it on other buildings, pickaxe buys keep it
+      // intact, and harvester feeding skips it. Everyone else spends
+      // freely: their gold could never fund the stash anyway.
+      let ecoTarget = null;
+      let mineTier = 0;
       for (const b of buildings) {
         if (b.type === "GoldMine" && b.tier > mineTier) mineTier = b.tier;
-        if (b.type === "GoldStash") {
-          const c = upgradeCost("GoldStash", b.tier);
-          if (c && c.gold > stashReserve) stashReserve = c.gold;
+        if (!ECONOMY_TYPES.has(b.type) || b.tier >= MAX_TIER) continue;
+        const c = upgradeCost(b.type, b.tier);
+        if (!c) continue;
+        if (!ecoTarget || b.tier < ecoTarget.tier ||
+            (b.tier === ecoTarget.tier && c.gold < ecoTarget.cost.gold)) {
+          ecoTarget = { uid: b.uid, type: b.type, tier: b.tier, cost: c };
         }
       }
-      for (const bot of group) maybePickaxe(bot, now, mineTier, stashReserve);
+      let saver = null;
+      if (ecoTarget) {
+        for (const bot of group) {
+          if (!saver || (bot.myPlayer.gold || 0) > (saver.myPlayer.gold || 0)) saver = bot;
+        }
+      }
+      const ecoReserve = (ecoTarget && saver)
+        ? { saverId: saver.id, uid: ecoTarget.uid, gold: ecoTarget.cost.gold }
+        : null;
+
+      // Buy better pickaxes for FARMING bots (uses each bot's own gold).
+      // Willingness scales with the top GoldMine tier (emerald → max).
+      // Only the SAVER reserves the economy target's gold — the others'
+      // gold can't fund the stash, so spending it on pickaxes is free.
+      for (const bot of group) {
+        const reserve = (ecoReserve && bot.id === ecoReserve.saverId) ? ecoReserve.gold : 0;
+        maybePickaxe(bot, now, mineTier, reserve);
+      }
 
       // Mutable per-session material copy for in-cycle deduction.
       const localMats = new Map();
@@ -775,7 +812,7 @@ function createCoordinator({ getBots, sendToUser }) {
       for (let i = 0; i < MAX_UPGRADES_PER_TICK; i++) {
         // Refresh working tiers from our mutable copy.
         for (const b of workingBuildings) b.tier = tierByUid.get(b.uid);
-        const pick = pickUpgrade(workingBuildings, group, cfg.aheadBy, localMats, now);
+        const pick = pickUpgrade(workingBuildings, group, cfg.aheadBy, localMats, now, ecoReserve);
         if (!pick) break;
 
         // Out-of-range upgrade: no affordable session is close enough.
@@ -824,18 +861,22 @@ function createCoordinator({ getBots, sendToUser }) {
         rebuildPass(partyId, group, buildings, now, actions);
       }
 
-      // "Done" = every (non-stash) building is maxed and there's nothing
-      // left to upgrade. Drives the when-done behaviour below.
+      // "Done" = EVERY building (including the GoldStash) is maxed. The
+      // stash used to be excluded here, which made "when done: stop/base"
+      // kick in while the stash still had its expensive 100k/400k tiers
+      // pending — the coordinator recalled everyone and nobody farmed for
+      // the stash. The stash upgrades like everything else; it counts.
       const allMaxed = buildings.length > 0 &&
-        buildings.every((b) => b.type === "GoldStash" || b.tier >= MAX_TIER);
+        buildings.every((b) => b.tier >= MAX_TIER);
       const whenDone = cfg.whenDone || "keep";
       const resting = allMaxed && whenDone !== "keep";
 
       // ── Retreat-to-farm integration ──
       // "While saving up gold, retreat to the farm location" and
       // "if a bot is low on materials, go back to farming".
-      //   saving = nobody in the group can afford the PRIORITY-HEAD
-      //            upgrade (the one pickUpgrade wants to fund next).
+      //   saving = nobody in the group can afford the next ECONOMY
+      //            upgrade (stash/mine; falls back to the priority head
+      //            when the economy is fully maxed).
       // A bot with a farmSpot is sent to farm when saving OR low on
       // wood/stone, and recalled (nav off) once it's flush again.
       // Hysteresis via the bot._coordFarming flag prevents per-tick
@@ -866,34 +907,38 @@ function createCoordinator({ getBots, sendToUser }) {
         const { ecoMin, restMax } = tierStats(buildings);
         const { floor: FARM_FLOOR, ceil: FARM_CEIL } = farmThresholds(ecoMin, restMax);
 
-        // "saving" = there's a pending upgrade but NO bot can afford the
-        // PRIORITY HEAD — the upgrade pickUpgrade would fund next (economy
-        // first, then the gap-capped rest), chosen with the same ordering.
-        // It must NOT be anchored on the globally-cheapest building (the
-        // old code): that included gap-capped walls the picker would never
-        // fire, and flipped sign every time passive mine income crossed a
-        // cheap price — each flip yanked farm bots home for one click and
-        // sent them straight back out. This is the farm↔base ping-pong the
-        // wiki calls out (12 §4 "economy-anchored saving"). Debounced so a
-        // single tick can't flip the group state.
-        let head = null;
-        for (const b of buildings) {
-          if (b.tier >= MAX_TIER) continue;
-          const cls = classOf(b.type, b.tier, ecoMin, restMax, cfg.aheadBy);
-          if (cls === 99) continue;                  // gap-capped → never the target
-          const c = upgradeCost(b.type, b.tier);
-          if (!c) continue;
-          if (!head || cls < head.cls ||
-              (cls === head.cls && (b.tier < head.tier ||
-                (b.tier === head.tier && c.gold < head.cost.gold)))) {
-            head = { cls, tier: b.tier, cost: c };
+        // "saving" = nobody in the group can afford the SAVING TARGET.
+        // The target is the next ECONOMY upgrade when one is pending —
+        // the 100k tier-7 / 400k tier-8 stash, or the next mine — and
+        // only falls back to the priority head when the economy is fully
+        // maxed. It must NOT be anchored on the globally-cheapest
+        // building: that flipped sign every time passive mine income
+        // crossed a cheap price — each flip yanked farm bots home for
+        // one click and sent them straight back out (the farm↔base
+        // ping-pong; wiki 12 §4 "economy-anchored saving"). Debounced so
+        // a single tick can't flip the group state.
+        let savingTarget = ecoTarget ? ecoTarget.cost : null;
+        if (!savingTarget) {
+          let head = null;
+          for (const b of buildings) {
+            if (b.tier >= MAX_TIER) continue;
+            const cls = classOf(b.type, b.tier, ecoMin, restMax, cfg.aheadBy);
+            if (cls === 99) continue;                // gap-capped → never the target
+            const c = upgradeCost(b.type, b.tier);
+            if (!c) continue;
+            if (!head || cls < head.cls ||
+                (cls === head.cls && (b.tier < head.tier ||
+                  (b.tier === head.tier && c.gold < head.cost.gold)))) {
+              head = { cls, tier: b.tier, cost: c };
+            }
           }
+          savingTarget = head && head.cost;
         }
-        const anyAfford = head && group.some((bot) => {
+        const anyAfford = savingTarget && group.some((bot) => {
           const p = bot.myPlayer;
-          return canAfford({ gold: p.gold||0, wood: p.wood||0, stone: p.stone||0, token: p.token||0 }, head.cost);
+          return canAfford({ gold: p.gold||0, wood: p.wood||0, stone: p.stone||0, token: p.token||0 }, savingTarget);
         });
-        const savingNow = !!head && !anyAfford;
+        const savingNow = !!savingTarget && !anyAfford;
         if (savingNow) {
           if (!savingSince.has(partyId)) savingSince.set(partyId, now);
         } else {
@@ -902,6 +947,23 @@ function createCoordinator({ getBots, sendToUser }) {
         const saving = savingNow && (now - (savingSince.get(partyId) || now) > 1500);
         savingState = saving;
 
+        // ALL hands farm while saving: a bot with no farm spot of its own
+        // adopts the group's spot (the ring slots fan everyone out around
+        // it), so nobody idles at base while the party saves for an
+        // expensive stash tier.
+        if (saving) {
+          const donor = group.find((b) => b.farmSpot);
+          if (donor) {
+            for (const bot of group) {
+              if (bot.farmSpot || !bot.setFarmSpot) continue;
+              bot.setFarmSpot(donor.farmSpot.x, donor.farmSpot.y, donor.farmSpot.angle);
+              if (donor.farmTargets && bot.setFarmTargets) bot.setFarmTargets(donor.farmTargets);
+              bot.farmFixed = donor.farmFixed;
+              bot._adoptedFarmSpot = true;
+            }
+          }
+        }
+
         for (const bot of group) {
           if (!bot.farmSpot) continue;          // only manage bots with a spot
           // Don't yank a bot we just dispatched to upgrade an out-of-range
@@ -909,6 +971,21 @@ function createCoordinator({ getBots, sendToUser }) {
           if (bot._upgradeMoveUntil && now < bot._upgradeMoveUntil) continue;
           const p = bot.myPlayer;
           const wood = p.wood || 0, stone = p.stone || 0;
+          // Saver fast-path: once the designated saver is within reach of
+          // the economy target (≥95% funded — passive mine income closes
+          // the rest), bring it home so the upgrade fires the moment the
+          // last gold lands, and don't send it back out for a pointless
+          // half-trip. Its gold only grows (it's reserved), so this can't
+          // thrash.
+          if (ecoReserve && bot.id === ecoReserve.saverId &&
+              (p.gold || 0) >= ecoReserve.gold * 0.95) {
+            if (bot._coordFarming) {
+              bot._coordFarming = false;
+              bot.returnToBase = true;
+              bot.setNavActive(false);   // walk home, fire on arrival
+            }
+            continue;
+          }
           if (!bot._coordFarming) {
             // Start farming when low on materials OR the group is saving.
             if (saving || wood < FARM_FLOOR || stone < FARM_FLOOR) {
@@ -967,7 +1044,7 @@ function createCoordinator({ getBots, sendToUser }) {
       }
       // Farm harvester ring — convert surplus gold to materials at the farm.
       if (cfg.farmHarvesters !== false) {
-        farmHarvestPass(group, buildings, now, actions);
+        farmHarvestPass(group, buildings, now, actions, ecoReserve && ecoReserve.saverId);
       }
 
       // Build a compact tier summary for the dashboard.
@@ -985,6 +1062,15 @@ function createCoordinator({ getBots, sendToUser }) {
         enabled: true,
         ecoMin: ts.ecoMin, restMax: ts.restMax,
         saving: savingState,
+        // Stash/mine progress: what the group is saving toward, who's
+        // carrying the gold, and how close they are.
+        ecoNext: ecoTarget ? {
+          type: ecoTarget.type, toTier: ecoTarget.tier + 1,
+          gold: ecoTarget.cost.gold,
+          saver: saver ? saver.id : null,
+          saverLabel: saver ? saver.label : null,
+          saverGold: saver ? (saver.myPlayer.gold | 0) : 0,
+        } : null,
         farmFloor: farmGoal.floor, farmCeil: farmGoal.ceil,
         buildings: buildings.length,
         summary,
