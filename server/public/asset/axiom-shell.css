@@ -832,9 +832,12 @@ input[type="password"].ax-input, select.ax-input, textarea.ax-input {
 }
 
 /* Ambient aurora — two slow-drifting blurred glows behind the UI.
-   Children get lifted onto their own layer so the glow stays behind. */
+   z-index:-1 paints them above the (canvas-propagated) body background
+   but below ALL content. Never reposition body children for this — a
+   `.ax-ambient > *` lift overrode position:fixed on the modals and
+   silently broke every body-level overlay. */
 .ax-ambient::before, .ax-ambient::after {
-  content: ""; position: fixed; z-index: 0; pointer-events: none;
+  content: ""; position: fixed; z-index: -1; pointer-events: none;
   width: 64vw; height: 64vh; border-radius: 50%;
   filter: blur(90px); opacity: .55; will-change: transform;
 }
@@ -848,7 +851,6 @@ input[type="password"].ax-input, select.ax-input, textarea.ax-input {
   background: radial-gradient(circle, rgba(70, 95, 150, 0.17), transparent 65%);
   animation: ax-aurora-b 58s ease-in-out infinite;
 }
-.ax-ambient > * { position: relative; z-index: 1; }
 
 /* View-change entrance: the dashboard adds .ax-view-enter to #main only
    when the SELECTION changes, so cards rise in once per view — never on
