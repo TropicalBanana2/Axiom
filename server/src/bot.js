@@ -305,8 +305,41 @@ class Bot extends EventEmitter {
     this.emit("behaviourChange", key, !!value);
   }
 
+  // Clear everything learned from a previous connection so an in-place
+  // reconnect starts from a clean slate — stale entity/building uids
+  // from the old life would otherwise ghost through the smart-upgrade
+  // coordinator and the farm logic. CONFIG survives (label, psk,
+  // behaviours, farmSpot, navBase, farm targets): preserving it across
+  // reconnects is the whole point of reusing the Bot instance.
+  resetWorldState() {
+    this.codec = new BinCodec();
+    this.uid = 0;
+    this.tick = 0;
+    this.entities = new Map();
+    this.myPlayer = null;
+    this.myPet = null;
+    this.gs = null;
+    this.buildings = new Map();
+    this.localBuildings = [];
+    this.partyInfo = [];
+    this.parties = {};
+    this.party = { id: null, name: null, shareKey: this.psk || null, members: [] };
+    this.inventory = [];
+    this.leaderboard = [];
+    this.dayCycle = null;
+    this.isPaused = false;
+    this.petActivated = false;
+    this.recentMessages = [];
+    this.navReturning = false;
+    this.navErrand = null;
+    this.navPath = null;
+    this.navIndex = 0;
+    this.farmLock = null;
+  }
+
   start() {
     if (this.state !== STATE.IDLE && this.state !== STATE.CLOSED) return;
+    this.resetWorldState();
     this.state = STATE.CONNECTING;
     this.wasm = createWasmSolver();
     // Connect to the server's raw IP and present the TLS name via SNI +

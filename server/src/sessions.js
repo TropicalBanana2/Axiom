@@ -183,25 +183,41 @@ function _wireBot(bot, userId) {
     }
   });
   bot.on("enterWorld", () => {
+    bot._reconnectDelay = 0;   // healthy again → backoff resets
     stmts.updateSessionStatus.run("in_world", Date.now(), sid);
     userSessionsBroadcast(userId, { op: "sessions", data: listSessionsForUser(userId) });
   });
   bot.on("close", () => {
-    stmts.updateSessionStatus.run("closed", Date.now(), sid);
-    userSessionsBroadcast(userId, { op: "closed", data: { id: sid } });
-    bots.delete(sid);
-    subscribersBySid.delete(sid);
-    // Same-process autoReconnect: re-spawn an identical bot under a
-    // fresh DB row. We keep the SAME parameters (label/server/psk) but
-    // the new sid will differ — the user's character is gone anyway.
-    if (bot.behaviours.autoReconnect) {
-      setTimeout(() => {
-        spawnBot(userId, {
-          label: bot.label, serverId: bot.serverId,
-          playerName: bot.playerName, psk: bot.psk,
-        });
-      }, 1500);
+    // User-initiated close (the "close" op flips autoReconnect off
+    // first) → mark closed and forget the session.
+    if (!bot.behaviours.autoReconnect) {
+      stmts.updateSessionStatus.run("closed", Date.now(), sid);
+      userSessionsBroadcast(userId, { op: "closed", data: { id: sid } });
+      bots.delete(sid);
+      subscribersBySid.delete(sid);
+      return;
     }
+    // In-place reconnect with exponential backoff: the SAME session (sid,
+    // behaviours, farm spot, base anchor, attach subscribers) retries
+    // until the server comes back. The old approach killed the session
+    // and spawned a fresh DB row every 1.5 s — id churn, broken attach
+    // tabs, lost farm/behaviour state, and one error line per retry for
+    // as long as a zombs server stayed down (the ENOTFOUND/ETIMEDOUT
+    // storms in the pm2 logs).
+    bot._reconnectDelay = Math.min((bot._reconnectDelay || 1500) * 2, 60000);
+    stmts.updateSessionStatus.run("connecting", Date.now(), sid);
+    userSessionsBroadcast(userId, { op: "sessions", data: listSessionsForUser(userId) });
+    const delay = bot._reconnectDelay;
+    console.log(`[bot ${sid}] disconnected — reconnecting in ${Math.round(delay / 1000)}s`);
+    setTimeout(() => {
+      if (bots.get(sid) !== bot) return;            // closed/replaced meanwhile
+      if (!bot.behaviours.autoReconnect) return;    // user closed during the wait
+      try { bot.start(); }
+      catch (e) {
+        console.error(`[bot ${sid}] reconnect failed:`, e.message);
+        bot.emit("close");                          // re-enter backoff
+      }
+    }, delay);
   });
   bot.on("error", (err) => console.error(`[bot ${sid}]`, err.message));
 }
