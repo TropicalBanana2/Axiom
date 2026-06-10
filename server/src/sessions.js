@@ -43,19 +43,33 @@ const {
 
 const PORT = parseInt(process.env.AXIOM_SESSIONS_PORT || "8090", 10);
 
-const wss = new WebSocket.Server({ port: PORT, maxPayload: 65536 });
-wss.on("listening", () => console.log(`[axiom-sessions] listening on :${PORT}`));
-wss.on("error", (err) => {
-  if (err && err.code === "EADDRINUSE") {
-    console.error(
-      `[axiom-sessions] port ${PORT} is already in use — another axiom-sessions ` +
-      `instance is probably running. Not starting a duplicate. ` +
-      `Run "pm2 delete axiom-sessions" (or kill the stray node process) and start once.`);
-    process.exit(0);
-  }
-  console.error(`[axiom-sessions] server error:`, err);
-  process.exit(1);
-});
+// Bind with retry: across a pm2 restart the previous instance can hold
+// the port for a few seconds while its sockets drain — retrying here is
+// invisible to clients, while the old "exit and let pm2 cycle" approach
+// dropped every dashboard/attach connection and spammed the error log
+// with an EADDRINUSE stack each time.
+let wss;
+let bindTries = 0;
+function bindServer() {
+  wss = new WebSocket.Server({ port: PORT, maxPayload: 65536 });
+  wss.on("listening", () => console.log(`[axiom-sessions] listening on :${PORT}`));
+  wss.on("error", (err) => {
+    if (err && err.code === "EADDRINUSE") {
+      if (++bindTries <= 15) {
+        console.error(`[axiom-sessions] port ${PORT} busy (previous instance still closing) — retry ${bindTries}/15 in 2s`);
+        setTimeout(bindServer, 2000);
+        return;
+      }
+      console.error(
+        `[axiom-sessions] port ${PORT} still in use after ${bindTries - 1} retries — another ` +
+        `instance really is running. Run "pm2 delete axiom-sessions" and start once.`);
+      process.exit(0);
+    }
+    console.error(`[axiom-sessions] server error:`, err);
+    process.exit(1);
+  });
+  wss.on("connection", handleConnection);
+}
 
 // In-memory state.
 const bots = new Map();              // axiom sid -> Bot instance
@@ -228,7 +242,7 @@ function purgeStaleSessions() {
 purgeStaleSessions();
 
 // -------- WS handlers --------------------------------------------------
-wss.on("connection", (ws) => {
+const handleConnection = (ws) => {
   ws.id = ++connId;
   ws.userId = null;
   ws.authed = false;
@@ -269,7 +283,8 @@ wss.on("connection", (ws) => {
     }
     connections.delete(ws.id);
   });
-});
+};
+bindServer();
 
 function handleJsonFrame(ws, raw, authTimer) {
   const frame = decodeJson(raw);
@@ -665,7 +680,7 @@ spotsDailySync.unref && spotsDailySync.unref();
 // Rows are left as-is; the next process boot will purgeStaleSessions().
 function gracefulExit() {
   for (const bot of bots.values()) bot.stop();
-  wss.close();
+  if (wss) wss.close();
   setTimeout(() => process.exit(0), 300);
 }
 process.on("SIGTERM", gracefulExit);

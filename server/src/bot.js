@@ -309,8 +309,15 @@ class Bot extends EventEmitter {
     if (this.state !== STATE.IDLE && this.state !== STATE.CLOSED) return;
     this.state = STATE.CONNECTING;
     this.wasm = createWasmSolver();
-    this.ws = new WebSocket(`wss://${this.server.host}`, {
-      headers: { Origin: "", "User-Agent": "Mozilla/5.0 (Axiom)" },
+    // Connect to the server's raw IP and present the TLS name via SNI +
+    // Host header. Certificate verification still fully applies (Node
+    // checks the cert against `servername`), but DNS is out of the loop
+    // entirely — a resolver outage for the eggs.gg vanity hostnames once
+    // took the whole fleet down in a getaddrinfo ENOTFOUND reconnect
+    // storm. The browser client connects by IP the same way.
+    this.ws = new WebSocket(`wss://${this.server.hostname}`, {
+      headers: { Origin: "", "User-Agent": "Mozilla/5.0 (Axiom)", Host: this.server.host },
+      servername: this.server.host,
     });
     this.ws.binaryType = "arraybuffer";
     this.ws.on("open", () => this.emit("open"));

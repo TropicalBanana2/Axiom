@@ -24,26 +24,39 @@ setFlagsFromString("--expose_gc");
 const gc = runInNewContext("gc");
 
 const PORT = parseInt(process.env.AXIOM_SOCKETS_PORT || "8100", 10);
-const wss = new WebSocket.Server({ port: PORT, maxPayload: 65536 });
-wss.on("listening", () => console.log(`[axiom-sockets] listening on :${PORT}`));
-wss.on("error", (err) => {
-  if (err && err.code === "EADDRINUSE") {
-    console.error(
-      `[axiom-sockets] port ${PORT} is already in use — another axiom-sockets ` +
-      `instance is probably running. Not starting a duplicate. ` +
-      `Run "pm2 delete axiom-sockets" (or kill the stray node process) and start once.`);
-    process.exit(0);   // clean exit so pm2 doesn't crash-loop / spam stack traces
-  }
-  console.error(`[axiom-sockets] server error:`, err);
-  process.exit(1);
-});
+// Bind with retry: across a pm2 restart the previous instance can hold
+// the port for a few seconds while its sockets drain — retrying here is
+// invisible to clients, while the old "exit and let pm2 cycle" approach
+// spammed the error log with an EADDRINUSE stack each time.
+let wss;
+let bindTries = 0;
+function bindServer() {
+  wss = new WebSocket.Server({ port: PORT, maxPayload: 65536 });
+  wss.on("listening", () => console.log(`[axiom-sockets] listening on :${PORT}`));
+  wss.on("error", (err) => {
+    if (err && err.code === "EADDRINUSE") {
+      if (++bindTries <= 15) {
+        console.error(`[axiom-sockets] port ${PORT} busy (previous instance still closing) — retry ${bindTries}/15 in 2s`);
+        setTimeout(bindServer, 2000);
+        return;
+      }
+      console.error(
+        `[axiom-sockets] port ${PORT} still in use after ${bindTries - 1} retries — another ` +
+        `instance really is running. Run "pm2 delete axiom-sockets" and start once.`);
+      process.exit(0);
+    }
+    console.error(`[axiom-sockets] server error:`, err);
+    process.exit(1);
+  });
+  wss.on("connection", handleConnection);
+}
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const enc = (s) => encoder.encode(s);
 const dec = (b) => decoder.decode(b);
 
-wss.on("connection", (ws) => {
+const handleConnection = (ws) => {
   ws.modules = new Map();
   ws.authed = false;
   ws.userId = null;
@@ -108,4 +121,5 @@ wss.on("connection", (ws) => {
     ws.modules.clear();
     gc();
   });
-});
+};
+bindServer();
