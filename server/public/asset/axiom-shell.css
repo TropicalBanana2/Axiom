@@ -798,3 +798,130 @@ input[type="password"].ax-input, select.ax-input, textarea.ax-input {
 }
 .ax-row:hover .ax-row-action,
 .ax-row-action:focus-visible { opacity: 1; }
+
+
+/* ────────────────────────────────────────────────────────────────────
+ * Motion & ambience — the liquid-glass theme's animation layer.
+ * Shared by every page (landing, dashboard, /play intro, in-game panel).
+ * Entrance animations are opt-in via .ax-view-enter so live data
+ * refreshes never replay them; ambience is opt-in via .ax-ambient.
+ * ──────────────────────────────────────────────────────────────────── */
+@keyframes ax-rise {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes ax-pop {
+  from { opacity: 0; transform: scale(.96) translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes ax-aurora-a {
+  0%, 100% { transform: translate(-10%, -8%) scale(1); }
+  50%      { transform: translate(9%, 7%) scale(1.18); }
+}
+@keyframes ax-aurora-b {
+  0%, 100% { transform: translate(8%, 10%) scale(1.12); }
+  50%      { transform: translate(-9%, -7%) scale(.94); }
+}
+@keyframes ax-gradient-pan {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* Ambient aurora — two slow-drifting blurred glows behind the UI.
+   Children get lifted onto their own layer so the glow stays behind. */
+.ax-ambient::before, .ax-ambient::after {
+  content: ""; position: fixed; z-index: 0; pointer-events: none;
+  width: 64vw; height: 64vh; border-radius: 50%;
+  filter: blur(90px); opacity: .55; will-change: transform;
+}
+.ax-ambient::before {
+  left: -12vw; top: -20vh;
+  background: radial-gradient(circle, rgba(99, 115, 170, 0.20), transparent 65%);
+  animation: ax-aurora-a 46s ease-in-out infinite;
+}
+.ax-ambient::after {
+  right: -14vw; bottom: -22vh;
+  background: radial-gradient(circle, rgba(70, 95, 150, 0.17), transparent 65%);
+  animation: ax-aurora-b 58s ease-in-out infinite;
+}
+.ax-ambient > * { position: relative; z-index: 1; }
+
+/* View-change entrance: the dashboard adds .ax-view-enter to #main only
+   when the SELECTION changes, so cards rise in once per view — never on
+   the per-second data refreshes. */
+.ax-view-enter > * { animation: ax-rise .38s cubic-bezier(.2,.8,.2,1) both; }
+.ax-view-enter > *:nth-child(2) { animation-delay: .045s; }
+.ax-view-enter > *:nth-child(3) { animation-delay: .09s; }
+.ax-view-enter > *:nth-child(4) { animation-delay: .135s; }
+.ax-view-enter > *:nth-child(5) { animation-delay: .18s; }
+.ax-view-enter > *:nth-child(6) { animation-delay: .225s; }
+.ax-view-enter > *:nth-child(7) { animation-delay: .27s; }
+.ax-view-enter > *:nth-child(n+8) { animation-delay: .31s; }
+
+/* Buttons — lift on hover, press on click, shine sweep on primary. */
+.ax-btn {
+  position: relative; overflow: hidden;
+  transition: background .15s, border-color .15s, color .15s,
+              transform .15s cubic-bezier(.2,.8,.2,1), box-shadow .15s;
+}
+.ax-btn:hover { transform: translateY(-1px); }
+.ax-btn:active { transform: translateY(0) scale(.97); }
+.ax-btn.primary::after {
+  content: ""; position: absolute; top: 0; bottom: 0;
+  left: -70%; width: 45%;
+  background: linear-gradient(100deg, transparent, rgba(255,255,255,.65), transparent);
+  transform: skewX(-18deg);
+  transition: left .5s ease;
+  pointer-events: none;
+}
+.ax-btn.primary:hover::after { left: 130%; }
+.ax-icon-btn { transition: background .15s, color .15s, border-color .15s, transform .15s; }
+.ax-icon-btn:active { transform: scale(.92); }
+
+/* Toggle — springy knob. */
+.ax-toggle::after {
+  transition: transform .32s cubic-bezier(.34,1.56,.64,1), background .15s;
+}
+
+/* Inputs — soft focus ring. */
+.ax-input:focus { box-shadow: 0 0 0 3px rgba(255,255,255,0.055); }
+
+/* Sidebar rows — gentle slide on hover. */
+.ax-row { transition: background .12s, border-color .12s, color .12s, transform .14s; }
+.ax-row:hover { transform: translateX(2px); }
+
+/* Modals — backdrop fade + card pop. */
+.ax-modal-bg.open { animation: ax-fade-in .18s ease both; }
+.ax-modal-bg.open .ax-modal { animation: ax-pop .3s cubic-bezier(.22,1.18,.36,1) both; }
+
+/* Cards — hover gets a touch more presence (no entrance animation here:
+   the dashboard re-renders cards on live data, see .ax-view-enter). */
+.ax-card { transition: border-color .18s, box-shadow .18s; }
+.ax-card:hover { border-color: var(--glass-border-h); }
+
+/* Interactive spotlight — landing cards track the cursor with a soft
+   radial highlight (JS sets --mx / --my per card). */
+.ax-spot { position: relative; }
+.ax-spot::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit;
+  background: radial-gradient(220px circle at var(--mx, 50%) var(--my, 50%),
+    rgba(255,255,255,0.08), transparent 65%);
+  opacity: 0; transition: opacity .25s; pointer-events: none;
+}
+.ax-spot:hover::after { opacity: 1; }
+
+/* Scroll reveal (landing) — elements fade-rise the first time they
+   enter the viewport. */
+.ax-reveal { opacity: 0; transform: translateY(18px); transition: opacity .6s ease, transform .6s cubic-bezier(.2,.8,.2,1); }
+.ax-reveal.in { opacity: 1; transform: none; }
+
+/* Accessibility: collapse all motion for users who asked for less. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+  .ax-reveal { opacity: 1; transform: none; }
+}

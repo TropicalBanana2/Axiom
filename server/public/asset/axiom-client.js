@@ -1081,6 +1081,18 @@
   // ----- main pane -----
   function renderMain() {
     const main = $("#main");
+    // Stagger-animate the cards ONLY when the view changes (a different
+    // session/party/overview was selected) — live data refreshes re-render
+    // the same view every second and must not replay the entrance.
+    const viewKey = state.selectedParty
+      ? `p:${state.selectedParty.serverId}:${state.selectedParty.partyId}`
+      : state.selectedSid !== null ? `s:${state.selectedSid}` : "overview";
+    if (state._lastViewKey !== viewKey) {
+      state._lastViewKey = viewKey;
+      main.classList.add("ax-view-enter");
+      clearTimeout(state._viewEnterT);
+      state._viewEnterT = setTimeout(() => main.classList.remove("ax-view-enter"), 650);
+    }
     main.innerHTML = "";
     if (state.selectedParty) { renderPartyView(main); return; }
     if (state.selectedSid === null) {
