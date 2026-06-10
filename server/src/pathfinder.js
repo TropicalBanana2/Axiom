@@ -116,6 +116,23 @@ function buildObstacles(bot, win) {
     }
   }
 
+  // Pass 1b — world-spot atlas: trees/stones/camps the FLEET has seen but
+  // this bot currently can't (outside its AOI). Resource spots are static
+  // per server, so they're safe to trust — without this, a long cross-map
+  // path happily routes straight through an unseen forest and the bot
+  // spends the whole trip in stuck-recovery. Live entities (pass 1) win:
+  // any uid this bot can see right now is skipped here.
+  if (bot._worldSpots) {
+    for (const uid in bot._worldSpots) {
+      if (bot.entities && bot.entities.has(+uid)) continue;
+      const s = bot._worldSpots[uid];
+      if (!inWindow(win, s.x, s.y)) continue;
+      if (s.m === "Tree")       markCircle(blocked, s.x, s.y, TREE_RADIUS);
+      else if (s.m === "Stone") markCircle(blocked, s.x, s.y, STONE_RADIUS);
+      else                      markCircle(blocked, s.x, s.y, 70);   // NeutralCamp
+    }
+  }
+
   // Pass 2 — own base: bot.buildings is the authoritative party base from
   // LocalBuilding (always present, unlike entity coverage which can lag).
   // Everything here is owned by definition.

@@ -116,6 +116,19 @@ app.get("/zombs-leaderboard", async (req, res) => {
   }
 });
 
+// ----- world resource atlas --------------------------------------------
+// Trees / stones / camps the fleet has seen on a server (static spots,
+// captured by sessions.js → worldSpots). Consumed by the in-game
+// "World Resources" overlay, which injects them as client entities.
+const { getAtlas } = require("./worldSpots");
+app.get("/api/spots/:serverId", (req, res) => {
+  const serverId = String(req.params.serverId || "");
+  if (!/^v\d{1,6}$/.test(serverId)) return res.status(400).json({ spots: {} });
+  const spots = getAtlas(serverId);
+  res.set("Cache-Control", "no-store");
+  res.json({ serverId, count: Object.keys(spots).length, spots });
+});
+
 // ----- asset manifest (for the modded client preloader) ---------------
 const picturesRoot = path.join(__dirname, "..", "public", "asset", "pictures");
 function walkAssets(dir = picturesRoot) {

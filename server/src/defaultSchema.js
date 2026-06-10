@@ -762,6 +762,73 @@ if (!H.obs) {
 }
 ctx.toast('Obstacle indicators on');`),
 
+  // ── World Resources ──
+  // Renders EVERY tree / stone / camp the FLEET has ever seen on this
+  // server, not just the ones near you. Resource entities have static
+  // positions and fixed uids (1–400 tree, 401–800 stone, 801–825 camp);
+  // the axiom server unions every bot's view into a per-server atlas
+  // (/api/spots), and this script injects the atlas as client entities —
+  // Banshee's serverspots technique, minus the manual capture walk. The
+  // modded client never removes Tree/Stone/NeutralCamp entities, so
+  // injected ones stay rendered; live server data takes over a uid the
+  // moment it enters your AOI.
+  scr_worldResources: scr("scr_worldResources", "World Resources",
+    `const on = !!value;
+ctx.storage.set('axiom.worldres.on', on);
+const game = ctx.game.game;
+const S = (window.__axiomSpots = window.__axiomSpots || { injected: new Set(), timer: null });
+const clear = () => {
+  if (S.timer) { clearInterval(S.timer); S.timer = null; }
+  const removeFn = game?.world?.removeEntity2 || game?.world?.removeEntity;
+  let n = 0;
+  for (const uid of S.injected) {
+    try {
+      const e = game.world.entities.get(uid);
+      const t = e && (e.targetTick || e.fromTick);
+      // Only remove ghosts WE injected — if the live server has since
+      // taken the uid over (it entered your AOI), leave it alone.
+      if (t && t.__axiomGhost) { removeFn.call(game.world, uid); n++; }
+    } catch {}
+  }
+  S.injected.clear();
+  return n;
+};
+if (!on) { const n = clear(); ctx.toast('World Resources off (' + n + ' ghosts cleared)'); return; }
+if (!game?.world?.createEntity || !game?.options?.serverId) { ctx.toast('World Resources: attach first'); return; }
+const inject = async () => {
+  let data;
+  try {
+    const r = await fetch('/api/spots/' + game.options.serverId);
+    data = await r.json();
+  } catch { return -1; }
+  const spots = (data && data.spots) || {};
+  let n = 0;
+  for (const uid in spots) {
+    const id = +uid;
+    if (game.world.entities.get(id)) continue;   // live or already injected
+    const s = spots[uid];
+    try {
+      game.world.createEntity({
+        uid: id, model: s.m, entityClass: 'Prop',
+        position: { x: s.x, y: s.y },
+        yaw: 0, health: 100, maxHealth: 100, width: 32, height: 32,
+        collisionRadius: 70, dead: 0, timeDead: 0, slowed: 0, stunned: 0,
+        hits: [], interpolatedYaw: 0,
+        __axiomGhost: 1,
+      });
+      S.injected.add(id);
+      n++;
+    } catch {}
+  }
+  return n;
+};
+inject().then((n) => {
+  if (n < 0) { ctx.toast('World Resources: /api/spots unreachable'); return; }
+  ctx.toast('World Resources: +' + n + ' spots rendered (atlas grows as bots roam)');
+});
+// The fleet keeps discovering new spots — top up every 30 s while on.
+S.timer = setInterval(() => { if (ctx.storage.get('axiom.worldres.on')) inject(); }, 30000);`),
+
   scr_buildingLife: scr("scr_buildingLife", "Building Lifetime",
     `// Renders a PIXI.Text label above every friendly building showing
 // HP% / current tier. Updates on every entity tick.
@@ -1588,7 +1655,7 @@ else if (controlId === 'bs-unpin') {
 };
 
 const DEFAULT_SCHEMA = {
-  schemaVersion: 24,
+  schemaVersion: 25,
   meta: {
     name: "Axiom",
     version: "0.1.0",
@@ -1763,6 +1830,8 @@ const DEFAULT_SCHEMA = {
             { type: "toggle", id: "vis-stash", label: "Stash Indicators", scriptId: "scr_stashIndicators" },
             { type: "toggle", id: "vis-obstacle", label: "Obstacle Indicators", scriptId: "scr_obstacleInd",
               tooltip: "Shows trees/rocks pathfinding bounding boxes." },
+            { type: "toggle", id: "vis-worldres", label: "World Resources", scriptId: "scr_worldResources",
+              tooltip: "Renders every tree/stone/camp the whole fleet has ever seen on this server — not just the ones near you." },
             { type: "toggle", id: "vis-blife", label: "Building Lifetime", scriptId: "scr_buildingLife",
               tooltip: "Shows how long each building has been alive." },
             { type: "toggle", id: "vis-grouping", label: "Grouping Grid", scriptId: "scr_grouping",

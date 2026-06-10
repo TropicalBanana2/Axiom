@@ -35,6 +35,7 @@ const { Bot } = require("./bot");
 const { stmts, db } = require("./db");
 const { verifyToken } = require("./auth");
 const { createCoordinator } = require("./smartUpgrade");
+const worldSpots = require("./worldSpots");
 const {
   encodeJson, decodeJson, wrapBinary, unwrapBinary,
   TAG_RPC_OUT, TAG_BUFFER_OUT, TAG_PACKET_IN,
@@ -639,6 +640,17 @@ setInterval(() => {
     send(ws, { op: "fleet", data: byUser.get(ws.userId) || [] });
   }
 }, 400);
+
+// Resource atlas — union every bot's AOI view of the static trees /
+// stones / camps (uid ≤ 825) into a persistent per-server map. Feeds the
+// /api/spots endpoint (in-game "World Resources" overlay) and gives the
+// pathfinder vision beyond each bot's own AOI.
+setInterval(() => {
+  for (const bot of bots.values()) {
+    try { worldSpots.collectFromBot(bot); } catch {}
+  }
+  worldSpots.flush();
+}, 5000);
 
 // Graceful shutdown — close every bot's socket cleanly, then exit.
 // Rows are left as-is; the next process boot will purgeStaleSessions().
