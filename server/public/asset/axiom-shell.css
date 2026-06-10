@@ -787,3 +787,14 @@ input[type="password"].ax-input, select.ax-input, textarea.ax-input {
   background: linear-gradient(90deg, rgba(134,239,172,0.9), #86efac);
   box-shadow: 0 0 12px rgba(134,239,172,0.6);
 }
+
+/* Sidebar session-row quick action (attach) — hidden until row hover. */
+.ax-row-action {
+  width: 22px; height: 22px;
+  font-size: 10px; border-radius: 6px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity .12s;
+}
+.ax-row:hover .ax-row-action,
+.ax-row-action:focus-visible { opacity: 1; }

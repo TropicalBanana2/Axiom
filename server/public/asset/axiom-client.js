@@ -200,6 +200,8 @@
   function renderSessions() {
     const list = $("#session-list");
     list.innerHTML = "";
+    const count = $("#session-count");
+    if (count) count.textContent = state.sessions.length ? `· ${state.sessions.length}` : "";
     if (state.sessions.length === 0) {
       list.appendChild(el("div", { class: "ax-empty", style: "height: auto; padding: 18px 12px" },
         el("div", { class: "ax-empty-icon" }, "∅"),
@@ -249,17 +251,30 @@
         );
         list.appendChild(head);
 
-        // Sessions under the party (indented).
+        // Sessions under the party (indented). Meta shows live gold (the
+        // number you actually glance for) + a pickaxe while the bot is
+        // out farming; uptime moved to the hover tooltip. The ▶ appears
+        // on hover for one-click attach without selecting first.
         for (const s of sessions) {
+          const st = s.stats || {};
           const dot = el("span", { class: `ax-row-dot ${s.status === "in_world" ? "on" : s.status === "closed" ? "err" : "warn"}` });
+          const meta = s.status === "in_world"
+            ? `${fmtShort(st.gold || 0)}g${s.navActive ? " ⛏" : ""}`
+            : s.status;
+          const attachBtn = el("button", {
+            class: "ax-icon-btn ax-row-action", title: "Attach — open a /play tab on this session",
+            onclick: (e) => { e.stopPropagation(); window.open(`/play?attach=${s.id}`, "_blank"); },
+          }, "▶");
           list.appendChild(el("div", {
             class: `ax-row ${state.selectedSid === s.id ? "active" : ""}`,
             style: "padding-left:26px",
+            title: `up ${fmtMs(s.uptimeMs)}`,
             onclick: () => selectSession(s.id),
           },
             dot,
             el("span", { class: "ax-row-name" }, s.label),
-            el("span", { class: "ax-row-meta" }, fmtMs(s.uptimeMs))
+            el("span", { class: "ax-row-meta" }, meta),
+            attachBtn
           ));
         }
       }
@@ -1074,7 +1089,8 @@
           "Spawn a session to keep a bot in-game persistently, or play directly in your browser."),
         el("div", { class: "ax-actions" },
           el("button", { class: "ax-btn primary", onclick: () => window.open("/play", "_blank") }, "▶ Play in browser"),
-          el("button", { class: "ax-btn", onclick: openNewSessionModal }, "+ Spawn session"))
+          el("button", { class: "ax-btn", onclick: openNewSessionModal }, "+ Spawn session"),
+          el("button", { class: "ax-btn", onclick: () => $("#new-party-btn").click() }, "⊕ Create party"))
       );
       main.appendChild(overview);
       return;
@@ -1082,15 +1098,28 @@
     const s = state.sessions.find((x) => x.id === state.selectedSid);
     if (!s) { state.selectedSid = null; renderMain(); return; }
     const initials = s.label.slice(0, 2).toUpperCase();
+    const stColor = s.status === "in_world" ? "var(--success)"
+                  : s.status === "closed" ? "var(--danger)" : "var(--warning)";
+    const playerName = (s.stats && s.stats.name) || s.playerName || "";
     const head = el("div", { style: "display:flex; align-items:center; gap:14px; margin-bottom:18px" },
-      el("div", { style: `width:48px; height:48px; border-radius:8px;
+      el("div", { style: `position:relative; width:48px; height:48px; border-radius:12px;
                           background:var(--bg-panel); border:1px solid var(--border);
                           display:flex; align-items:center; justify-content:center;
-                          font:600 16px var(--font-mono); color: var(--text)` }, initials),
+                          font:600 16px var(--font-mono); color: var(--text)` },
+        initials,
+        el("span", { title: s.status,
+          style: `position:absolute; right:-3px; bottom:-3px; width:11px; height:11px;
+                  border-radius:50%; background:${stColor}; border:2px solid var(--bg)` })),
       el("div", {},
-        el("div", { style: "font-size: 18px; font-weight: 500" }, s.label),
+        el("div", { style: "display:flex; align-items:center; gap:8px" },
+          el("div", { style: "font-size: 18px; font-weight: 500" }, s.label),
+          el("button", { class: "ax-icon-btn", title: "Rename session",
+            onclick: () => {
+              const v = prompt("New label:", s.label);
+              if (v && v.trim()) send({ op: "rename", sid: s.id, args: { label: v.trim().slice(0, 30) } });
+            } }, "✎")),
         el("div", { style: "color: var(--text-dim); font: 11px var(--font-mono); margin-top: 3px" },
-          `id #${s.id} · ${s.serverId} · ${s.status} · ${fmtMs(s.uptimeMs)}`)
+          `#${s.id} · ${s.serverId}${playerName ? " · " + playerName : ""} · ${s.status} · up ${fmtMs(s.uptimeMs)}`)
       ),
       el("div", { style: "margin-left: auto; display: flex; gap: 8px" },
         el("button", { class: "ax-btn primary",
@@ -1106,37 +1135,56 @@
     );
     main.appendChild(head);
 
-    // Rename card
-    const renameInput = el("input", { class: "ax-input", placeholder: "new label", maxlength: 30 });
+    // -------- Live stats card --------
+    // First card: the numbers you check most. Chips + an HP bar instead
+    // of the old two-column label/value table. (The rename card is gone —
+    // renaming is the ✎ button in the header now.)
+    const stats = s.stats || {};
+    const fmtN = (n) => (n || 0).toLocaleString();
+    const hpPct = stats.maxHealth ? Math.max(0, Math.min(1, stats.health / stats.maxHealth)) : 0;
+    const hpCol = hpPct > 0.5 ? "var(--success)" : hpPct > 0.25 ? "var(--warning)" : "var(--danger)";
+    const chip = (label, value) =>
+      el("div", { style: "flex:1;min-width:88px;padding:8px 10px;background:rgba(255,255,255,0.03);border:1px solid var(--glass-divider);border-radius:10px" },
+        el("div", { style: "font:9px var(--font);letter-spacing:1px;text-transform:uppercase;color:var(--text-dim);margin-bottom:3px" }, label),
+        el("div", { style: "font:500 14px var(--font-mono);color:var(--text)" }, value));
     main.appendChild(el("div", { class: "ax-card" },
-      el("div", { class: "ax-card-title" }, "rename"),
-      el("div", { class: "ax-grid-2" },
-        el("div", { class: "ax-field" }, el("label", {}, "Current"), el("input", { class: "ax-input", disabled: true, value: s.label })),
-        el("div", { class: "ax-field" }, el("label", {}, "New label"), renameInput)
-      ),
-      el("div", { class: "ax-actions" },
-        el("button", { class: "ax-btn",
-          onclick: () => { if (renameInput.value.trim()) send({ op: "rename", sid: s.id, args: { label: renameInput.value.trim() } }); }
-        }, "Apply"))
+      el("div", { class: "ax-card-title" }, "live stats"),
+      el("div", { style: "display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px" },
+        chip("Wave", fmtN(stats.wave)), chip("Score", fmtN(stats.score)),
+        chip("Gold", fmtN(stats.gold)), chip("Wood", fmtN(stats.wood)),
+        chip("Stone", fmtN(stats.stone)), chip("Tokens", fmtN(stats.token))),
+      el("div", { style: "display:flex;align-items:center;gap:10px" },
+        el("span", { style: "font:9px var(--font);letter-spacing:1px;text-transform:uppercase;color:var(--text-dim)" }, "hp"),
+        el("div", { style: "flex:1;height:6px;border-radius:999px;background:rgba(255,255,255,0.08);overflow:hidden" },
+          el("div", { style: `height:100%;width:${(hpPct * 100).toFixed(0)}%;border-radius:999px;background:${hpCol};transition:width .3s` })),
+        el("span", { style: "font:11px var(--font-mono);color:var(--text-mute)" },
+          stats.maxHealth ? `${Math.round(stats.health)} / ${stats.maxHealth}` : "—")),
+      stats.weaponName ? el("div", { style: "margin-top:10px;padding-top:10px;border-top:1px solid var(--glass-divider);font-size:11px;color:var(--text-dim)" },
+        `Weapon: `, el("strong", { style: "color:var(--text-mute);font-family:var(--font-mono)" }, `${stats.weaponName} T${stats.weaponTier || 0}`),
+        stats.petName ? el("span", {}, `  ·  Pet: `, el("strong", { style: "color:var(--text-mute);font-family:var(--font-mono)" }, `${stats.petName} T${stats.petTier || 0}`)) : el("span", {})
+      ) : el("div", {})
     ));
 
-    // -------- Farm Observer card --------
-    // Empty shells (#farm-observer text + #farm-canvas minimap); the
-    // contents are painted by updateFarmObserver(), which is called
-    // immediately after appending AND on every farmState envelope.
-    const farmCanvas = el("canvas", { id: "farm-canvas" });
-    farmCanvas.width = 200; farmCanvas.height = 200;
-    farmCanvas.style.cssText = "border:1px solid var(--border);border-radius:8px;background:rgba(0,0,0,0.18);display:block;flex-shrink:0";
+    // -------- Behaviour toggles --------
+    // Right under the stats: these are what you actually flip day to day.
+    const beh = s.behaviours || {};
+    const behaviourRows = ["autoFarm", "autoReconnect", "autoHeal", "autoRevive",
+                           "autoRefiller", "autoBreakIn", "autoaim", "autobow"].map((key) => {
+      const t = el("button", { class: `ax-toggle ${beh[key] ? "on" : ""}`, "data-key": key });
+      t.onclick = () => {
+        const nv = !t.classList.contains("on");
+        t.classList.toggle("on", nv);
+        send({ op: "setBehaviour", sid: s.id, args: { key, value: nv } });
+      };
+      return el("div", { class: "ax-ctrl-row" },
+        el("span", { class: "ax-ctrl-label" }, prettyKey(key)),
+        t);
+    });
     main.appendChild(el("div", { class: "ax-card" },
-      el("div", { class: "ax-card-title" }, "farm observer"),
-      el("div", { class: "ax-card-hint" },
-        "Trees green · stones gray · pair target purple · blacklisted red X · nav path cyan · farm spot yellow ◎."),
-      el("div", { style: "display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap" },
-        farmCanvas,
-        el("div", { id: "farm-observer", style: "flex:1;min-width:200px" })
-      )
+      el("div", { class: "ax-card-title" }, "behaviours"),
+      el("div", { class: "ax-card-hint" }, "Per-session toggles — applied to this bot only."),
+      ...behaviourRows
     ));
-    updateFarmObserver();
 
     // -------- Farm Spot / Navigation card --------
     // Mark a point + angle, then send the bot there (pathfinding out of
@@ -1181,27 +1229,23 @@
         el("span", { class: "ax-ctrl-label" }, "Go to spot & farm"), navToggle)
     ));
 
-    // -------- Live stats card --------
-    const stats = s.stats || {};
-    const statRow = (label, value, mono = true) =>
-      el("div", { style: "display:flex;align-items:baseline;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)" },
-        el("span", { style: "color:var(--text-dim);font-size:11px;text-transform:uppercase;letter-spacing:0.5px" }, label),
-        el("span", { style: `color:var(--text);font:${mono?"500 13px var(--font-mono)":"500 13px var(--font)"}` }, value)
-      );
-    const fmtN = (n) => (n || 0).toLocaleString();
-    const fmtHp = stats.maxHealth ? `${Math.round(stats.health)} / ${stats.maxHealth}` : "—";
+    // -------- Farm Observer card --------
+    // Empty shells (#farm-observer text + #farm-canvas minimap); the
+    // contents are painted by updateFarmObserver(), which is called
+    // immediately after appending AND on every farmState envelope.
+    const farmCanvas = el("canvas", { id: "farm-canvas" });
+    farmCanvas.width = 200; farmCanvas.height = 200;
+    farmCanvas.style.cssText = "border:1px solid var(--border);border-radius:8px;background:rgba(0,0,0,0.18);display:block;flex-shrink:0";
     main.appendChild(el("div", { class: "ax-card" },
-      el("div", { class: "ax-card-title" }, "live stats"),
-      el("div", { class: "ax-grid-2" },
-        el("div", {}, statRow("Wave", fmtN(stats.wave)), statRow("Score", fmtN(stats.score)), statRow("HP", fmtHp)),
-        el("div", {}, statRow("Wood", fmtN(stats.wood)), statRow("Stone", fmtN(stats.stone)),
-                       statRow("Gold", fmtN(stats.gold)), statRow("Tokens", fmtN(stats.token)))
-      ),
-      stats.weaponName ? el("div", { style: "margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:11px;color:var(--text-dim)" },
-        `Weapon: `, el("strong", { style: "color:var(--text-mute);font-family:var(--font-mono)" }, `${stats.weaponName} T${stats.weaponTier||0}`),
-        stats.petName ? el("span", {}, `  ·  Pet: `, el("strong", { style: "color:var(--text-mute);font-family:var(--font-mono)" }, `${stats.petName} T${stats.petTier||0}`)) : el("span", {})
-      ) : el("div", {})
+      el("div", { class: "ax-card-title" }, "farm observer"),
+      el("div", { class: "ax-card-hint" },
+        "Trees green · stones gray · pair target purple · blacklisted red X · nav path cyan · farm spot yellow ◎."),
+      el("div", { style: "display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap" },
+        farmCanvas,
+        el("div", { id: "farm-observer", style: "flex:1;min-width:200px" })
+      )
     ));
+    updateFarmObserver();
 
     // -------- Party card --------
     const party = s.party || {};
@@ -1263,25 +1307,6 @@
       ...memberRows
     ));
 
-    // -------- Behaviour toggles --------
-    const beh = s.behaviours || {};
-    const behaviourRows = ["autoFarm", "autoReconnect", "autoHeal", "autoRevive",
-                           "autoRefiller", "autoBreakIn", "autoaim", "autobow"].map((key) => {
-      const t = el("button", { class: `ax-toggle ${beh[key] ? "on" : ""}`, "data-key": key });
-      t.onclick = () => {
-        const nv = !t.classList.contains("on");
-        t.classList.toggle("on", nv);
-        send({ op: "setBehaviour", sid: s.id, args: { key, value: nv } });
-      };
-      return el("div", { class: "ax-ctrl-row" },
-        el("span", { class: "ax-ctrl-label" }, prettyKey(key)),
-        t);
-    });
-    main.appendChild(el("div", { class: "ax-card" },
-      el("div", { class: "ax-card-title" }, "behaviours"),
-      el("div", { class: "ax-card-hint" }, "Per-session — explicit sessionId on every command, no implicit globals."),
-      ...behaviourRows
-    ));
   }
   function prettyKey(k) {
     // Lower-case bot flags don't split on camel humps — label them by hand.
@@ -1537,9 +1562,11 @@
   $("#global-search").addEventListener("input", (e) => {
     const q = e.target.value.trim().toLowerCase();
     const list = $("#session-list");
+    // Match the whole row text (label, party name, status, gold meta), so
+    // "closed", "party 5" or "v50" filter too — not just the label.
     $$(".ax-row", list).forEach((row) => {
-      const name = (row.querySelector(".ax-row-name")?.textContent || "").toLowerCase();
-      row.style.display = !q || name.includes(q) ? "" : "none";
+      const hay = (row.textContent || "").toLowerCase();
+      row.style.display = !q || hay.includes(q) ? "" : "none";
     });
   });
 
