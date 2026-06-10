@@ -175,16 +175,32 @@
     }
 
     // Populate server <select> (visible) and the hidden hud-intro one.
+    // Default = the FIRST server in the list (no hardcoded favourite).
     const visibleSel = document.getElementById("ax-server");
     const hiddenSel  = document.getElementById("hud-intro-server-hidden");
     for (const [id, name] of (window.AXIOM_SERVERS || [])) {
       [visibleSel, hiddenSel].forEach((sel) => {
         const o = document.createElement("option");
         o.value = id; o.textContent = `${id} — ${name}`;
-        if (id === "v5001") o.selected = true;
         sel.appendChild(o);
       });
     }
+    visibleSel.selectedIndex = 0;
+    hiddenSel.selectedIndex = 0;
+
+    // Label every option with its live population (community scanner,
+    // proxied + cached by the axiom server). Best-effort: offline just
+    // leaves the plain labels.
+    fetch("/api/server-pops").then((r) => r.json()).then((pops) => {
+      const byId = new Map((pops || []).map((p) => [p.serverId, p.population]));
+      const names = new Map(window.AXIOM_SERVERS || []);
+      for (const sel of [visibleSel, hiddenSel]) {
+        for (const o of sel.options) {
+          const pop = byId.get(o.value);
+          if (pop !== undefined) o.textContent = `${o.value} — ${names.get(o.value) || o.value} · ${pop}/40`;
+        }
+      }
+    }).catch(() => {});
 
     // Instantiate the engine.
     let GameClass;

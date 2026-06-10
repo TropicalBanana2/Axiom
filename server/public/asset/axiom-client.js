@@ -67,6 +67,8 @@
     } catch { return resetToken(); }
     $("#app").style.display = "grid";
     populateServers();
+    loadServerPops();                                  // label pickers with live pops
+    setInterval(loadServerPops, 120000);               // keep them fresh
     renderMain();
     renderServerToggles();
     renderPartyRefiller();
@@ -1417,14 +1419,37 @@
     return n + "";
   }
 
+  // ----- server populations (community scanner via our proxy) -----
+  // Fetched once at boot + on demand; labels every server <select> option
+  // with "· N/40" so picking an empty (or full) server is one glance.
+  let serverPops = new Map();   // serverId -> population
+  async function loadServerPops() {
+    try {
+      const r = await fetch("/api/server-pops");
+      const pops = await r.json();
+      serverPops = new Map((pops || []).map((p) => [p.serverId, p.population]));
+      labelServerOptions($("#ns-server"));
+      labelServerOptions($("#np-server"));
+    } catch {}
+  }
+  function serverLabel(id, name) {
+    const pop = serverPops.get(id);
+    return `${id} — ${name}${pop !== undefined ? ` · ${pop}/40` : ""}`;
+  }
+  function labelServerOptions(sel) {
+    if (!sel) return;
+    const names = new Map(window.AXIOM_SERVERS);
+    for (const o of sel.options) o.textContent = serverLabel(o.value, names.get(o.value) || o.value);
+  }
+
   // ----- new session modal -----
   function populateServers() {
     const sel = $("#ns-server");
     if (sel.options.length) return;
     for (const [id, name] of window.AXIOM_SERVERS) {
-      sel.appendChild(el("option", { value: id }, `${id} — ${name}`));
+      sel.appendChild(el("option", { value: id }, serverLabel(id, name)));
     }
-    sel.value = "v5001";
+    sel.selectedIndex = 0;   // default = first server in the list
     sel.onchange = () => { renderServerToggles(); renderPartyRefiller(); };
   }
   function openNewSessionModal() { $("#new-modal").classList.add("open"); }
@@ -1470,9 +1495,9 @@
     const sel = $("#np-server");
     if (sel.options.length) return;
     for (const [id, name] of window.AXIOM_SERVERS) {
-      sel.appendChild(el("option", { value: id }, `${id} — ${name}`));
+      sel.appendChild(el("option", { value: id }, serverLabel(id, name)));
     }
-    sel.value = "v5001";
+    sel.selectedIndex = 0;   // default = first server in the list
   }
   function openCreatePartyModal() {
     populatePartyServers();

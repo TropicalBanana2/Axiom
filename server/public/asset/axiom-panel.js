@@ -36,7 +36,20 @@
   }
 
   // ── Script host ──────────────────────────────────────────────────
+  // Control values persist in localStorage (axiom.val.<id>) so toggles,
+  // sliders, and selects survive a reload — and so scripts can read any
+  // control's value even if its tab was never opened this session.
   const valueStore = new Map();
+  function persistValue(id, v) {
+    valueStore.set(id, v);
+    try { localStorage.setItem("axiom.val." + id, JSON.stringify(v)); } catch {}
+  }
+  function loadPersisted(id) {
+    try {
+      const raw = localStorage.getItem("axiom.val." + id);
+      return raw === null ? undefined : JSON.parse(raw);
+    } catch { return undefined; }
+  }
   const scriptCache = new Map();
   const consoleBuf = [];
   const eventBus = new EventTarget();
@@ -117,11 +130,31 @@
       this.searchQ = "";
       this.visible = false;
       this.controlNodes = new Map();
+      this.seedValues();
       this.build();
       document.body.appendChild(this.backdrop);
       document.body.appendChild(this.root);
       this.render();
       this.bindHotkey();
+    }
+
+    // Seed every control's value (persisted → schema default) across ALL
+    // tabs, not just the rendered one — so scripts can ctx.ui.getValue()
+    // controls on tabs that were never opened this session, and so the
+    // boot auto-apply pass knows which toggles should be armed.
+    seedValues() {
+      const walk = (controls) => {
+        for (const c of controls || []) {
+          if (c.controls) { walk(c.controls); continue; }
+          if (!c.id || c.type === "button" || c.type === "text") continue;
+          const persisted = loadPersisted(c.id);
+          const v = persisted !== undefined ? persisted
+                  : c.defaultValue !== undefined ? c.defaultValue
+                  : controlDefaultByType(c.type);
+          valueStore.set(c.id, v);
+        }
+      };
+      for (const tab of this.schema.tabs) for (const sec of tab.sections || []) walk(sec.controls);
     }
 
     build() {
@@ -352,7 +385,7 @@
       t.onclick = () => {
         const nv = !t.classList.contains("on");
         t.classList.toggle("on", nv);
-        valueStore.set(ctrl.id, nv);
+        persistValue(ctrl.id, nv);
         this.runBound(ctrl, nv);
       };
       return t;
@@ -377,7 +410,7 @@
       num.style.cssText = "font:11px var(--font-mono);color:var(--text-mute);min-width:30px;text-align:right";
       num.textContent = v;
       s.oninput = () => { num.textContent = s.value; };
-      s.onchange = () => { valueStore.set(ctrl.id, +s.value); this.runBound(ctrl, +s.value); };
+      s.onchange = () => { persistValue(ctrl.id, +s.value); this.runBound(ctrl, +s.value); };
       wrap.append(s, num);
       return wrap;
     }
@@ -387,14 +420,14 @@
       if (ctrl.min !== undefined) inp.min = ctrl.min;
       if (ctrl.max !== undefined) inp.max = ctrl.max;
       if (ctrl.step !== undefined) inp.step = ctrl.step;
-      inp.onchange = () => { valueStore.set(ctrl.id, +inp.value); this.runBound(ctrl, +inp.value); };
+      inp.onchange = () => { persistValue(ctrl.id, +inp.value); this.runBound(ctrl, +inp.value); };
       return inp;
     }
     buildText(ctrl, v) {
       const inp = document.createElement("input");
       inp.className = "ax-input"; inp.value = v || "";
       inp.placeholder = ctrl.placeholder || ""; inp.style.maxWidth = "180px";
-      inp.onchange = () => { valueStore.set(ctrl.id, inp.value); this.runBound(ctrl, inp.value); };
+      inp.onchange = () => { persistValue(ctrl.id, inp.value); this.runBound(ctrl, inp.value); };
       return inp;
     }
     buildSelect(ctrl, v) {
@@ -419,14 +452,14 @@
         opt.value = o.value; opt.textContent = o.label || o.value; s.appendChild(opt);
       }
       if (v !== undefined && [...s.options].some((o) => o.value === v)) s.value = v;
-      s.onchange = () => { valueStore.set(ctrl.id, s.value); this.runBound(ctrl, s.value); };
+      s.onchange = () => { persistValue(ctrl.id, s.value); this.runBound(ctrl, s.value); };
       return s;
     }
     buildColor(ctrl, v) {
       const c = document.createElement("input");
       c.type = "color"; c.value = v || "#ffffff";
       c.style.cssText = "width:30px;height:26px;border:1px solid var(--border);background:transparent;border-radius:4px";
-      c.onchange = () => { valueStore.set(ctrl.id, c.value); this.runBound(ctrl, c.value); };
+      c.onchange = () => { persistValue(ctrl.id, c.value); this.runBound(ctrl, c.value); };
       return c;
     }
     buildKeybind(ctrl, v) {
@@ -436,7 +469,7 @@
         b.textContent = "press a key…";
         const onKey = (e) => { e.preventDefault();
           const k = e.key.toUpperCase();
-          valueStore.set(ctrl.id, k); b.textContent = k;
+          persistValue(ctrl.id, k); b.textContent = k;
           document.removeEventListener("keydown", onKey, true);
           this.runBound(ctrl, k);
         };
@@ -500,6 +533,37 @@
   }
   function escape(s) { return String(s).replace(/[<>&]/g, (c) => ({ "<":"&lt;", ">":"&gt;", "&":"&amp;" }[c])); }
   function htmlEl(html) { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstChild; }
+
+  // ── Boot auto-apply ──────────────────────────────────────────────
+  // Toggle scripts install their hooks when flipped — but a fresh page
+  // has no hooks even though localStorage (or the schema default) says
+  // a toggle is ON. Once the player is actually in the world, fire every
+  // ON toggle's script as if the user had just flipped it, so features
+  // like World Resources and Optimizers are live from the first second.
+  function autoApplyToggles(panel) {
+    let tries = 0;
+    const timer = setInterval(() => {
+      const g = window.game;
+      if (!g || !g.ui || !g.ui.playerTick) {
+        if (++tries > 600) clearInterval(timer);   // give up after ~10 min idle
+        return;
+      }
+      clearInterval(timer);
+      const fired = [];
+      const walk = (controls) => {
+        for (const c of controls || []) {
+          if (c.controls) { walk(c.controls); continue; }
+          if (c.type === "toggle" && c.scriptId && valueStore.get(c.id)) {
+            const def = panel.schema.scripts && panel.schema.scripts[c.scriptId];
+            runScript(def, true, c.id, panel);
+            fired.push(c.label || c.id);
+          }
+        }
+      };
+      for (const tab of panel.schema.tabs) for (const sec of tab.sections || []) walk(sec.controls);
+      if (fired.length) log("auto-applied toggles:", fired.join(", "));
+    }, 1000);
+  }
 
   // ── Continuous base builder ─────────────────────────────────────
   // window.AxiomBuild.continuous(items, opts) walks the player through
@@ -779,6 +843,7 @@
     hookSettingsGear(panel);
     window.AxiomPanel = panel;
     startFleetOverlay();
+    autoApplyToggles(panel);
     log("ready — hotkey:", schema.meta.hotkey || "`", "+ Settings gear");
   });
 })();

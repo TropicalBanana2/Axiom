@@ -96,8 +96,16 @@ if (on) {
     H.autorespawn = true;
     game.network.addRpcHandler('Dead', () => {
       if (!ctx.storage.get('axiom.autorespawn.on')) return;
-      const btn = document.querySelector('#hud-respawn > div > div > div > button:nth-child(3)');
-      if (btn) btn.click();
+      // Respawn is an INPUT, not an RPC (wiki 08). Send it directly and
+      // also click the HUD button as a fallback — the old selector-only
+      // version silently did nothing when the HUD layout shifted.
+      setTimeout(() => {
+        try { game.network.sendInput({ respawn: 1 }); } catch {}
+        const btn = document.querySelector('#hud-respawn button:nth-child(3)') ||
+                    document.querySelector('#hud-respawn button') ||
+                    document.querySelector('#hud-respawn > div > div > div > button:nth-child(3)');
+        if (btn) btn.click();
+      }, 400);
     });
   }
 }
@@ -1655,7 +1663,7 @@ else if (controlId === 'bs-unpin') {
 };
 
 const DEFAULT_SCHEMA = {
-  schemaVersion: 25,
+  schemaVersion: 26,
   meta: {
     name: "Axiom",
     version: "0.1.0",
@@ -1831,7 +1839,8 @@ const DEFAULT_SCHEMA = {
             { type: "toggle", id: "vis-obstacle", label: "Obstacle Indicators", scriptId: "scr_obstacleInd",
               tooltip: "Shows trees/rocks pathfinding bounding boxes." },
             { type: "toggle", id: "vis-worldres", label: "World Resources", scriptId: "scr_worldResources",
-              tooltip: "Renders every tree/stone/camp the whole fleet has ever seen on this server — not just the ones near you." },
+              defaultValue: true,
+              tooltip: "Renders every tree/stone/camp on this server (fleet atlas + GitHub dataset) — not just the ones near you. On by default." },
             { type: "toggle", id: "vis-blife", label: "Building Lifetime", scriptId: "scr_buildingLife",
               tooltip: "Shows how long each building has been alive." },
             { type: "toggle", id: "vis-grouping", label: "Grouping Grid", scriptId: "scr_grouping",
@@ -1843,7 +1852,8 @@ const DEFAULT_SCHEMA = {
           id: "vis-perf", name: "Performance", collapsible: true, defaultOpen: false,
           controls: [
             { type: "toggle", id: "vis-optimize", label: "Optimizers", scriptId: "scr_optimizers",
-              tooltip: "Skips optional renderer work (zombie textures, hit flashes) to reclaim frame budget." },
+              defaultValue: true,
+              tooltip: "Hides optional renderer work (particles + attachments) to reclaim frame budget. On by default." },
           ],
         },
       ],

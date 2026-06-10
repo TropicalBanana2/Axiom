@@ -116,6 +116,32 @@ app.get("/zombs-leaderboard", async (req, res) => {
   }
 });
 
+// ----- server populations (community scanner proxy) ---------------------
+// The Banshee scanner VPS tracks per-server populations + leaderboards
+// (same API the old client's intro screen used). Proxied with a short
+// cache so every picker can label servers without hammering the scanner,
+// and so an outage degrades to stale data instead of broken UI.
+const SCANNER_URL = "http://95.111.234.133/api/servers";
+let popsCache = { t: 0, data: null };
+app.get("/api/server-pops", async (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  if (popsCache.data && Date.now() - popsCache.t < 60000) return res.json(popsCache.data);
+  try {
+    const r = await fetch(SCANNER_URL, { signal: AbortSignal.timeout(6000) });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const raw = await r.json();
+    const data = (Array.isArray(raw) ? raw : []).map((s) => ({
+      serverId: s.serverId,
+      population: s.population | 0,
+      lastScanned: s.lastScanned | 0,
+    }));
+    popsCache = { t: Date.now(), data };
+    res.json(data);
+  } catch {
+    res.json(popsCache.data || []);   // stale-if-error
+  }
+});
+
 // ----- world resource atlas --------------------------------------------
 // Trees / stones / camps the fleet has seen on a server (static spots,
 // captured by sessions.js → worldSpots). Consumed by the in-game
