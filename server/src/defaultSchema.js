@@ -159,6 +159,208 @@ const timer = setInterval(() => {
 ctx.storage.set('chatspamTimer', timer);
 ctx.toast(fixed ? 'Chat Spam on (your text)' : 'Chat Spam on (random pool)');`),
 
+  // ── Items & Pet (ported from the updated Banshee script.js) ──
+
+  // Keeps a ZombieShield up: rebuys whenever it's missing and gold allows.
+  scr_autoshield: scr("scr_autoshield", "Auto Shield",
+    `const on = !!value;
+ctx.storage.set('axiom.autoshield.on', on);
+const game = ctx.game.game;
+if (on) {
+  if (!game?.network?.addPacketHandler) { ctx.toast('Auto Shield: attach first'); return; }
+  const H = (game.__axiomHooks = game.__axiomHooks || {});
+  if (!H.autoshield) {
+    H.autoshield = true;
+    let nextAt = 0;
+    game.network.addPacketHandler(0, () => {
+      if (!ctx.storage.get('axiom.autoshield.on')) return;
+      const now = Date.now(); if (now < nextAt) return;
+      const me = game.ui && game.ui.playerTick; if (!me) return;
+      if (!game.ui.inventory.ZombieShield && (me.gold || 0) >= 1000) {
+        game.network.sendRpc({ name: 'BuyItem', itemName: 'ZombieShield', tier: 1 });
+        nextAt = now + 2000;
+      }
+    });
+  }
+}
+ctx.toast(on ? 'Auto Shield on' : 'Auto Shield off');`),
+
+  // Holds a chosen weapon: buys it if missing, re-equips if anything else
+  // (a heal chug, a pickaxe swap) knocked it out of hand.
+  scr_quickweapon: scr("scr_quickweapon", "Quick Weapon",
+    `const on = !!value;
+ctx.storage.set('axiom.quickweapon.on', on);
+const game = ctx.game.game;
+if (on) {
+  if (!game?.network?.addPacketHandler) { ctx.toast('Quick Weapon: attach first'); return; }
+  const H = (game.__axiomHooks = game.__axiomHooks || {});
+  if (!H.quickweapon) {
+    H.quickweapon = true;
+    let nextAt = 0;
+    game.network.addPacketHandler(0, () => {
+      if (!ctx.storage.get('axiom.quickweapon.on')) return;
+      const now = Date.now(); if (now < nextAt) return;
+      const me = game.ui && game.ui.playerTick; if (!me) return;
+      const want = ctx.ui.getValue('combat-quickweapon-item') || 'Bow';
+      const inv = game.ui.inventory[want];
+      if (!inv) {
+        if ((me.gold || 0) >= 100) {
+          game.network.sendRpc({ name: 'BuyItem', itemName: want, tier: 1 });
+          nextAt = now + 900;
+        }
+        return;
+      }
+      if (me.weaponName !== want) {
+        game.network.sendRpc({ name: 'EquipItem', itemName: want, tier: inv.tier || 1 });
+        nextAt = now + 900;
+      }
+    });
+  }
+}
+ctx.toast(on ? ('Quick Weapon: ' + (ctx.ui.getValue('combat-quickweapon-item') || 'Bow')) : 'Quick Weapon off');`),
+
+  // Buys the Pause spell ("Timeout") whenever it's off cooldown and gold
+  // allows — blocks zombie spawns for a full day/night cycle, every cycle.
+  scr_autotimeout: scr("scr_autotimeout", "Auto Timeout",
+    `const on = !!value;
+ctx.storage.set('axiom.autotimeout.on', on);
+const game = ctx.game.game;
+if (on) {
+  if (!game?.network?.addPacketHandler) { ctx.toast('Auto Timeout: attach first'); return; }
+  const H = (game.__axiomHooks = game.__axiomHooks || {});
+  if (!H.autotimeout) {
+    H.autotimeout = true;
+    let nextAt = 0;
+    game.network.addPacketHandler(0, () => {
+      if (!ctx.storage.get('axiom.autotimeout.on')) return;
+      const now = Date.now(); if (now < nextAt) return;
+      const me = game.ui && game.ui.playerTick; if (!me) return;
+      if (!me.isPaused && (me.gold || 0) >= 10000) {
+        game.network.sendRpc({ name: 'BuyItem', itemName: 'Pause', tier: 1 });
+        nextAt = now + 5000;   // server enforces the real 240 s cooldown
+      }
+    });
+  }
+}
+ctx.toast(on ? 'Auto Timeout on (10k gold per cycle)' : 'Auto Timeout off');`),
+
+  // Full pet upkeep: heal potion when the pet drops below the threshold,
+  // revive when it dies, evolve when level + tokens allow. Evolution gates
+  // are Banshee's proven numbers (level 9/17/25/33/49/65/97, tokens
+  // 100×4/200×2/300). NOTE: evolve sends ONLY BuyItem — equipping right
+  // after a mid-evolve is the known disconnect trap (wiki 10 §B4).
+  scr_petcare: scr("scr_petcare", "Pet Care",
+    `const on = !!value;
+ctx.storage.set('axiom.petcare.on', on);
+const game = ctx.game.game;
+if (on) {
+  if (!game?.network?.addPacketHandler) { ctx.toast('Pet Care: attach first'); return; }
+  const H = (game.__axiomHooks = game.__axiomHooks || {});
+  if (!H.petcare) {
+    H.petcare = true;
+    // EVOLVE[t] = requirement to BUY tier t (level = xp/100 + 1).
+    const EVOLVE = [null, null,
+      { lvl: 9,  tok: 100 }, { lvl: 17, tok: 100 }, { lvl: 25, tok: 100 },
+      { lvl: 33, tok: 100 }, { lvl: 49, tok: 200 }, { lvl: 65, tok: 200 },
+      { lvl: 97, tok: 300 }];
+    let nextItemAt = 0, nextEvolveAt = 0, seenPet = false;
+    game.network.addPacketHandler(0, () => {
+      if (!ctx.storage.get('axiom.petcare.on')) return;
+      const me = game.ui && game.ui.playerTick; if (!me) return;
+      const pet = game.ui.playerPetTick;
+      const now = Date.now();
+      if (pet && pet.health > 0) seenPet = true;
+      // Heal: stock a PetHealthPotion, chug it when the pet is low.
+      const thr = (ctx.ui.getValue('pet-heal-threshold') || 50) / 100;
+      if (pet && pet.maxHealth && pet.health > 0 && pet.health <= pet.maxHealth * thr && now >= nextItemAt) {
+        nextItemAt = now + 1000;
+        if (!game.ui.inventory.PetHealthPotion) {
+          game.network.sendRpc({ name: 'BuyItem', itemName: 'PetHealthPotion', tier: 1 });
+        } else {
+          game.network.sendRpc({ name: 'EquipItem', itemName: 'PetHealthPotion', tier: 1 });
+        }
+      }
+      // Revive: only after we've actually had a live pet this session, so
+      // a pet-less bot doesn't waste gold buying revives.
+      if (seenPet && (!pet || pet.health <= 0) && now >= nextItemAt) {
+        nextItemAt = now + 1500;
+        game.network.sendRpc({ name: 'BuyItem', itemName: 'PetRevive', tier: 1 });
+        game.network.sendRpc({ name: 'EquipItem', itemName: 'PetRevive', tier: 1 });
+      }
+      // Evolve: one BuyItem per window; never EquipItem alongside it.
+      if (pet && pet.tier < 8 && now >= nextEvolveAt) {
+        const need = EVOLVE[pet.tier + 1];
+        const lvl = (pet.experience || 0) / 100 + 1;
+        if (need && lvl >= need.lvl && (me.token || 0) >= need.tok) {
+          nextEvolveAt = now + 4000;
+          game.network.sendRpc({ name: 'BuyItem', itemName: pet.model, tier: pet.tier + 1 });
+        }
+      }
+    });
+  }
+}
+ctx.toast(on ? 'Pet Care on (heal / revive / evolve)' : 'Pet Care off');`),
+
+  // Casts HealTowersSpell on any tower under the HP threshold within spell
+  // range. One cast per window — the heal is an AOE and has a server-side
+  // cooldown, so spamming per-tower like the original wastes gold.
+  scr_towerheal: scr("scr_towerheal", "Tower Heal",
+    `const on = !!value;
+ctx.storage.set('axiom.towerheal.on', on);
+const game = ctx.game.game;
+if (on) {
+  if (!game?.network?.addPacketHandler) { ctx.toast('Tower Heal: attach first'); return; }
+  const H = (game.__axiomHooks = game.__axiomHooks || {});
+  if (!H.towerheal) {
+    H.towerheal = true;
+    const TOWERS = ['ArrowTower', 'CannonTower', 'BombTower', 'MagicTower', 'MeleeTower'];
+    let nextCastAt = 0;
+    game.network.addPacketHandler(0, () => {
+      if (!ctx.storage.get('axiom.towerheal.on')) return;
+      const now = Date.now(); if (now < nextCastAt) return;
+      const me = game.ui && game.ui.playerTick;
+      if (!me || !me.position) return;
+      const thr = (ctx.ui.getValue('build-towerheal-threshold') || 60) / 100;
+      for (const b of Object.values(game.ui.buildings || {})) {
+        if (!TOWERS.includes(b.type)) continue;
+        const e = game.world.entities.get(b.uid);
+        const t = e && e.targetTick;
+        if (!t || !t.maxHealth || t.health <= 0 || t.health > t.maxHealth * thr) continue;
+        if (Math.hypot(me.position.x - b.x, me.position.y - b.y) > 1000) continue;
+        game.network.sendRpc({ name: 'CastSpell', spell: 'HealTowersSpell', x: b.x, y: b.y, tier: 1 });
+        nextCastAt = now + 1500;
+        break;
+      }
+    });
+  }
+}
+ctx.toast(on ? 'Tower Heal armed' : 'Tower Heal off');`),
+
+  // Sells every non-stash building near the player (50% refund — wiki
+  // 10 §B2). Destructive, so it requires two clicks within 4 s: the first
+  // arms, the second fires. Pairs with Base Saver for relocating.
+  scr_sellnearby: scr("scr_sellnearby", "Sell Nearby",
+    `if (!value) return;
+const game = ctx.game.game;
+const me = game?.ui?.playerTick;
+if (!me || !me.position) { ctx.toast('Sell Nearby: attach first'); return; }
+const S = (window.__axiomSell = window.__axiomSell || {});
+const now = Date.now();
+if (!S.armedAt || now - S.armedAt > 4000) {
+  S.armedAt = now;
+  ctx.toast('Sell Nearby: click AGAIN within 4 s to confirm (50% refund, stash kept)');
+  return;
+}
+S.armedAt = 0;
+let n = 0;
+for (const b of Object.values(game.ui.buildings || {})) {
+  if (b.type === 'GoldStash') continue;
+  if (Math.hypot(b.x - me.position.x, b.y - me.position.y) > 1152) continue;
+  game.network.sendRpc({ name: 'DeleteBuilding', uid: b.uid });
+  n++;
+}
+ctx.toast('Sold ' + n + ' nearby buildings (50% refund)');`),
+
   // ── Building ──
   // ─ Real port of alterale's AHRC (alterale.js:5260+) ─
   scr_ahrc: scr("scr_ahrc", "AHRC",
@@ -1386,7 +1588,7 @@ else if (controlId === 'bs-unpin') {
 };
 
 const DEFAULT_SCHEMA = {
-  schemaVersion: 23,
+  schemaVersion: 24,
   meta: {
     name: "Axiom",
     version: "0.1.0",
@@ -1425,6 +1627,27 @@ const DEFAULT_SCHEMA = {
               tooltip: "Re-clicks the respawn button on death." },
           ],
         },
+        {
+          id: "combat-items", name: "Items & Pet", collapsible: true, defaultOpen: true,
+          controls: [
+            { type: "toggle", id: "combat-autoshield", label: "Auto Shield", scriptId: "scr_autoshield",
+              tooltip: "Rebuys a ZombieShield whenever it's missing (1k gold)." },
+            { type: "toggle", id: "combat-quickweapon", label: "Quick Weapon", scriptId: "scr_quickweapon",
+              tooltip: "Keeps the selected weapon bought and in hand — re-equips after potions/swaps knock it out." },
+            { type: "select", id: "combat-quickweapon-item", label: "Weapon", defaultValue: "Bow",
+              options: [
+                { value: "Bow",     label: "Bow" },
+                { value: "Spear",   label: "Spear" },
+                { value: "Pickaxe", label: "Pickaxe" },
+              ] },
+            { type: "toggle", id: "combat-autotimeout", label: "Auto Timeout", scriptId: "scr_autotimeout",
+              tooltip: "Buys the Pause spell every time it's available (10k gold) — blocks zombie spawns each cycle." },
+            { type: "toggle", id: "pet-care", label: "Pet Care", scriptId: "scr_petcare",
+              tooltip: "Auto pet upkeep: heal potion below the threshold, revive on death, evolve when level + tokens allow." },
+            { type: "slider", id: "pet-heal-threshold", label: "Pet heal at HP %",
+              defaultValue: 50, min: 10, max: 90, step: 5 },
+          ],
+        },
       ],
     },
     {
@@ -1455,6 +1678,10 @@ const DEFAULT_SCHEMA = {
               tooltip: "Auto-upgrades any tower whose HP falls below the threshold (Banshee's UTH)." },
             { type: "toggle", id: "build-rebuild", label: "Auto Rebuild", scriptId: "scr_rebuild",
               tooltip: "Rebuilds dead towers in their previous slot and re-upgrades them." },
+            { type: "toggle", id: "build-towerheal", label: "Tower Heal", scriptId: "scr_towerheal",
+              tooltip: "Casts the tower-heal spell on any tower below the HP threshold (1 cast / 1.5 s)." },
+            { type: "slider", id: "build-towerheal-threshold", label: "Heal towers at HP %",
+              defaultValue: 60, min: 10, max: 95, step: 5 },
           ],
         },
         {
@@ -1468,6 +1695,8 @@ const DEFAULT_SCHEMA = {
               tooltip: "On stash placement, auto-builds your saved base design." },
             { type: "toggle", id: "build-autotrap", label: "Auto Trap", scriptId: "scr_autotrap",
               tooltip: "Traps adjacent players with walls — close to use." },
+            { type: "button", id: "build-sellnearby", label: "Sell nearby (keep stash)", scriptId: "scr_sellnearby",
+              tooltip: "Sells every non-stash building near you for the 50% refund. Click twice within 4 s to confirm." },
           ],
         },
       ],

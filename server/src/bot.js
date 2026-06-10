@@ -64,48 +64,24 @@ class Bot extends EventEmitter {
     this.isPaused = false;
     this.schemas = {};               // BuildingShopPrices/ItemShopPrices/Spells
 
-    // Full Banshee Scripts set — every flag the per-tick behaviour
-    // code may reference. Defaults match Banshee's defaults (all false
-    // except autoReconnect/autoHeal which Axiom turns on by default).
+    // Per-session behaviour flags. Every key here is IMPLEMENTED in this
+    // file — the old copy of Banshee's full 30-flag list is gone: those
+    // flags were declared but never read anywhere (the dashboard didn't
+    // even render them), so toggling them silently did nothing. In-game
+    // script features (auto-trap, AHRC, chat spam, …) live in the panel
+    // schema instead (defaultSchema.js), not on the bot.
     this.behaviours = {
-      // Axiom-style on-by-default toggles
       autoFarm:        false,
       autoReconnect:   true,
       autoRefiller:    false,
       autoBreakIn:     false,
       autoHeal:        true,
       autoRevive:      true,    // respawn the alt automatically when it dies
-      // Banshee parity — all of the script flags exposed in zombsSessions.js
-      autobuild:       false,
-      autoupgrade:     false,
-      autobow:         false,
+      // Bot-side defender (the dashboard "Defender" clone preset):
+      // autoaim tracks the nearest hostile; autobow also keeps a Bow
+      // equipped and fires it. See _tickAutoDefend.
       autoaim:         false,
-      autopetrevive:   false,
-      autopetevolve:   false,
-      autopetheal:     false,
-      autoaimzombies:  false,
-      autoaimdemons:   false,
-      playertrick:        false,
-      reverseplayertrick: false,
-      bossreverseplayertrick: false,
-      tokenreverseplayertrick: false,
-      ahrc:            false,
-      upgradeall:      false,
-      sellall:         false,
-      upgradetowerhealth: false,
-      towerheal:       false,
-      autotimeout:     false,
-      positionlock:    false,
-      autofollow:      false,
-      antiarrow:       false,
-      revert:          false,
-      returnitems:     false,
-      autoweaponswitch: false,
-      automove:        false,
-      aimlock:         false,
-      chatspam:        false,
-      wallbounce:      false,
-      autoclearzombies: false,
+      autobow:         false,
     };
 
     // Internal per-tick state.
@@ -570,6 +546,14 @@ class Bot extends EventEmitter {
       this._tickAutoFarm();
     }
     if (!userCount && this.behaviours.autoHeal && this.myPlayer) this._tickAutoHeal();
+    // Bot-side defender — aim (and shoot) at the nearest hostile. Skipped
+    // while farming (the pickaxe swing owns the mouse) or navigating, so
+    // it never fights the other movement/aim systems.
+    if ((this.behaviours.autoaim || this.behaviours.autobow) &&
+        this.myPlayer && !this.myPlayer.dead && !navigating &&
+        !(this.behaviours.autoFarm && !this.hasFarmed)) {
+      this._tickAutoDefend();
+    }
     // autoRevive / autoBreakIn: when the alt's player is dead, schedule a
     // respawn input (the wiki confirms respawn = an inputPacketScheduler
     // input, not an RPC). Throttled to ~once/sec so we don't spam — the
@@ -934,6 +918,49 @@ class Bot extends EventEmitter {
     this.sendRpc("BuyItem", { itemName: "HealthPotion", tier: 1 });
     this.sendRpc("EquipItem", { itemName: "HealthPotion", tier: 1 });
     this.healCooldownTick = this.tick + 100;       // ~5 s @ 20 tps
+  }
+
+  // ── Bot-side defender (autoaim / autobow) ──
+  // Tracks the nearest hostile (zombie, or non-party player) within range
+  // and aims at it every tick. With autobow the bot also keeps a Bow
+  // bought + equipped and taps the fire key — Banshee's space-toggle
+  // pattern: alternating {space:1}/{space:0} fires one arrow per pair.
+  // This is what the dashboard's "Defender" clone preset turns on (it
+  // used to set flags nothing implemented — defenders just stood there).
+  _tickAutoDefend() {
+    const me = this.myPlayer;
+    const pos = me.position;
+    if (!pos) return;
+    const myPid = me.partyId;
+    let best = null, bestD = Infinity;
+    for (const [, e] of this.entities) {
+      const t = e.targetTick;
+      if (!t || !t.position || t.dead) continue;
+      const m = t.model || "";
+      const hostile =
+        (m === "GamePlayer" && t.uid !== this.uid && (!myPid || t.partyId !== myPid)) ||
+        m.startsWith("Zombie");
+      if (!hostile) continue;
+      const d = Math.hypot(t.position.x - pos.x, t.position.y - pos.y);
+      if (d < bestD) { bestD = d; best = t; }
+    }
+    if (!best || bestD > 900) return;   // nothing in engagement range
+    const yaw = Math.floor(
+      (Math.atan2(best.position.y - pos.y, best.position.x - pos.x) * 180 / Math.PI + 450) % 360) || 0;
+    this.sendInput({ mouseMoved: yaw });
+    if (!this.behaviours.autobow) return;
+    if (me.weaponName !== "Bow") {
+      // (Re)acquire the bow, throttled — BuyItem is a no-op if owned.
+      if (this.tick >= (this._bowBuyTick || 0)) {
+        this._bowBuyTick = this.tick + 100;   // ~5 s
+        const inv = (this.inventory || []).find((i) => i.itemName === "Bow");
+        this.sendRpc("BuyItem", { itemName: "Bow", tier: 1 });
+        this.sendRpc("EquipItem", { itemName: "Bow", tier: (inv && inv.tier) || 1 });
+      }
+      return;
+    }
+    this._bowFire = !this._bowFire;
+    this.sendInput({ space: this._bowFire ? 1 : 0 });
   }
 
   // ── Spot navigation state machine ──

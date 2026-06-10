@@ -1265,7 +1265,8 @@
 
     // -------- Behaviour toggles --------
     const beh = s.behaviours || {};
-    const behaviourRows = ["autoFarm", "autoReconnect", "autoHeal", "autoRevive", "autoRefiller", "autoBreakIn"].map((key) => {
+    const behaviourRows = ["autoFarm", "autoReconnect", "autoHeal", "autoRevive",
+                           "autoRefiller", "autoBreakIn", "autoaim", "autobow"].map((key) => {
       const t = el("button", { class: `ax-toggle ${beh[key] ? "on" : ""}`, "data-key": key });
       t.onclick = () => {
         const nv = !t.classList.contains("on");
@@ -1283,6 +1284,9 @@
     ));
   }
   function prettyKey(k) {
+    // Lower-case bot flags don't split on camel humps — label them by hand.
+    const SPECIAL = { autoaim: "Auto Aim (defender)", autobow: "Auto Bow (defender)" };
+    if (SPECIAL[k]) return SPECIAL[k];
     return k.replace(/([A-Z])/g, " $1").replace(/^./, (c) => c.toUpperCase());
   }
 

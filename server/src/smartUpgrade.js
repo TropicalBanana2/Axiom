@@ -18,7 +18,7 @@
 // Costs come from the static buildingData table (captured once; zombs.io
 // balance is stable). No runtime schema dependency.
 
-const { upgradeCost, placeCost, itemUpgradeCost, MAX_TIER } = require("./buildingData");
+const { upgradeCost, placeCost, MAX_TIER } = require("./buildingData");
 // Persist the per-user tuning knobs so they survive a pm2 restart (the
 // bots themselves are re-spawned from the sessions table, so their
 // upgrade settings should come back too). Stored in the schema_kv table.
