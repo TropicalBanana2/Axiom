@@ -64,4 +64,83 @@ function getAtlas(serverId) {
   return atlas(serverId);
 }
 
-module.exports = { collectFromBot, flush, getAtlas, MAX_SPOT_UID };
+// ── Upstream dataset (GitHub: AyuBloom/ZombsBuildingSandbox) ──────────
+// The ZombsBuildingSandbox project maintains a current Banshee-format
+// serverspots dataset for every live server. We treat it as the atlas's
+// UPSTREAM: fetched at boot and daily, merged gap-fill-only — anything
+// the fleet has observed live always wins over the dataset.
+const UPSTREAM_URL =
+  "https://raw.githubusercontent.com/AyuBloom/ZombsBuildingSandbox/main/src/app/serverspots.js";
+
+// Decode a Banshee serverspots.js source string into
+// { serverId: { uid: { x, y, m } } }. Banshee's exact packing: each
+// entry is y*100*50000 + x (coords have ≤ 2 decimals, map is 24000²),
+// the uid is the array position + 1, and the model follows the fixed
+// uid ranges (1–400 Tree · 401–800 Stone · 801–825 NeutralCamp).
+function decodeBansheeDataset(src) {
+  // The dataset file is plain JS that writes onto `window` — run it
+  // against a stub instead of parsing the 250KB literal by hand.
+  const windowStub = {};
+  new Function("window", src)(windowStub);
+  const dataset = windowStub.serverspots || windowStub.serverSpots;
+  const out = {};
+  if (!dataset || typeof dataset !== "object") return out;
+  const modelOf = (uid) => (uid <= 400 ? "Tree" : uid <= 800 ? "Stone" : "NeutralCamp");
+  for (const [serverId, entry] of Object.entries(dataset)) {
+    if (!/^v\d{1,6}$/.test(serverId) || !entry || !entry.spotEncoded) continue;
+    let arr;
+    try { arr = JSON.parse(entry.spotEncoded); } catch { continue; }
+    const spots = {};
+    for (let i = 0; i < Math.min(arr.length, MAX_SPOT_UID); i++) {
+      const packed = arr[i];
+      if (!packed) continue;
+      const x = ((((packed * 100).toFixed(2) - "") % 5000000) | 0) / 100;
+      const y = ((packed / 50000) | 0) / 100;
+      if (!(x >= 0 && x <= 24000 && y >= 0 && y <= 24000)) continue;
+      spots[i + 1] = { x: Math.round(x), y: Math.round(y), m: modelOf(i + 1) };
+    }
+    out[serverId] = spots;
+  }
+  return out;
+}
+
+// Merge a decoded dataset into the atlases — gap-fill only, then persist.
+function mergeDataset(decoded) {
+  let servers = 0, added = 0;
+  for (const [serverId, spots] of Object.entries(decoded)) {
+    const a = atlas(serverId);
+    let n = 0;
+    for (const uid in spots) {
+      if (!a[uid]) { a[uid] = spots[uid]; n++; }
+    }
+    if (n) dirty.add(serverId);
+    servers++; added += n;
+  }
+  flush();
+  return { servers, added };
+}
+
+let syncing = false;
+async function syncFromUpstream() {
+  if (syncing) return null;
+  syncing = true;
+  try {
+    const r = await fetch(UPSTREAM_URL);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const res = mergeDataset(decodeBansheeDataset(await r.text()));
+    console.log(`[worldSpots] upstream sync: +${res.added} spots across ${res.servers} servers`);
+    return res;
+  } catch (e) {
+    // Offline / GitHub down is fine — the fleet still self-captures and
+    // the next scheduled sync retries.
+    console.error("[worldSpots] upstream sync failed:", e && e.message);
+    return null;
+  } finally {
+    syncing = false;
+  }
+}
+
+module.exports = {
+  collectFromBot, flush, getAtlas, MAX_SPOT_UID,
+  decodeBansheeDataset, mergeDataset, syncFromUpstream, UPSTREAM_URL,
+};

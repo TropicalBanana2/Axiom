@@ -652,6 +652,15 @@ setInterval(() => {
   worldSpots.flush();
 }, 5000);
 
+// Seed/refresh the atlas from the ZombsBuildingSandbox GitHub dataset —
+// the maintained upstream for Banshee-format serverspots. Best-effort
+// (offline just means the fleet keeps self-capturing); gap-fill only, so
+// live observations are never overwritten. Boot + daily.
+const spotsBootSync = setTimeout(() => worldSpots.syncFromUpstream(), 5000);
+spotsBootSync.unref && spotsBootSync.unref();
+const spotsDailySync = setInterval(() => worldSpots.syncFromUpstream(), 24 * 3600 * 1000);
+spotsDailySync.unref && spotsDailySync.unref();
+
 // Graceful shutdown — close every bot's socket cleanly, then exit.
 // Rows are left as-is; the next process boot will purgeStaleSessions().
 function gracefulExit() {
