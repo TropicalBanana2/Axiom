@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "axiom-static-preview",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["tools-preview-static.js"],
+      "port": 5198
+    }
+  ]
+}
