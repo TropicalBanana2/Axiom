@@ -810,6 +810,23 @@ const inject = async () => {
     data = await r.json();
   } catch { return -1; }
   const spots = (data && data.spots) || {};
+  // Reconcile pass: drop ghosts the atlas no longer agrees with — the
+  // axiom server wipes a server's atlas when that zombs server resets
+  // (new map layout), and without this the old ghosts would keep
+  // rendering the dead world until a page reload.
+  const removeFn = game.world.removeEntity2 || game.world.removeEntity;
+  for (const id of [...S.injected]) {
+    const e = game.world.entities.get(id);
+    const t = e && (e.targetTick || e.fromTick);
+    if (!t || !t.__axiomGhost) { S.injected.delete(id); continue; }   // live took over
+    const s = spots[id];
+    const stale = !s || !t.position ||
+      Math.abs(t.position.x - s.x) > 1 || Math.abs(t.position.y - s.y) > 1;
+    if (stale) {
+      try { removeFn.call(game.world, id); } catch {}
+      S.injected.delete(id);
+    }
+  }
   let n = 0;
   for (const uid in spots) {
     const id = +uid;
@@ -1663,7 +1680,7 @@ else if (controlId === 'bs-unpin') {
 };
 
 const DEFAULT_SCHEMA = {
-  schemaVersion: 26,
+  schemaVersion: 27,
   meta: {
     name: "Axiom",
     version: "0.1.0",

@@ -24,6 +24,9 @@ const KEY = (serverId) => "spots:" + serverId;
 
 const atlases = new Map();   // serverId -> { uid: { x, y, m } }
 const dirty = new Set();     // serverIds with unpersisted additions
+const metas = new Map();     // serverId -> { tick, importHash }
+
+const META_KEY = (serverId) => "spotsMeta:" + serverId;
 
 function atlas(serverId) {
   let a = atlases.get(serverId);
@@ -34,20 +37,72 @@ function atlas(serverId) {
   return a;
 }
 
+function meta(serverId) {
+  let m = metas.get(serverId);
+  if (!m) {
+    try { m = schemaGet(META_KEY(serverId)) || {}; } catch { m = {}; }
+    metas.set(serverId, m);
+  }
+  return m;
+}
+function saveMeta(serverId) {
+  try { schemaSet(META_KEY(serverId), metas.get(serverId) || {}); } catch {}
+}
+
+// Cheap stable hash (djb2) for dataset dedupe.
+function hashStr(s) {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+// Drop everything we believe about a server's resource layout.
+function wipeServer(serverId, reason) {
+  atlases.set(serverId, {});
+  dirty.add(serverId);
+  flush();
+  console.log(`[worldSpots] wiped atlas for ${serverId} (${reason})`);
+}
+
+// ── Server-reset detection ──────────────────────────────────────────
+// zombs server ticks count up from 0 at 20/s since the last reset (the
+// enter-world packet carries the current tick as startingTick). A tick
+// LOWER than the highest we've ever seen for that server means the
+// server restarted — which regenerates the whole resource layout, so
+// every stored spot (fleet-captured AND imported) is garbage. Called by
+// sessions.js on every bot enter-world.
+const TICK_SLACK = 50000;   // ~40 min of ticks — tolerate clock noise
+function noteServerTick(serverId, tick) {
+  if (!serverId || !Number.isFinite(tick) || tick <= 0) return;
+  const m = meta(serverId);
+  if (Number.isFinite(m.tick) && tick < m.tick - TICK_SLACK) {
+    wipeServer(serverId, `server reset detected: tick ${tick} < last seen ${m.tick}`);
+  }
+  if (!Number.isFinite(m.tick) || tick > m.tick || tick < m.tick - TICK_SLACK) {
+    m.tick = tick;
+    saveMeta(serverId);
+  }
+}
+
 // Merge everything a bot can currently see into its server's atlas, and
-// hand the bot a live reference so the pathfinder can use it.
+// hand the bot a live reference so the pathfinder can use it. LIVE WINS:
+// a stored spot whose live twin sits somewhere else gets corrected — the
+// self-healing path for any staleness reset detection didn't catch.
 function collectFromBot(bot) {
   if (!bot || !bot.entities || !bot.serverId) return;
   const a = atlas(bot.serverId);
-  let added = 0;
+  let changed = 0;
   for (const [uid, e] of bot.entities) {
-    if (!(uid >= 1 && uid <= MAX_SPOT_UID) || a[uid]) continue;
+    if (!(uid >= 1 && uid <= MAX_SPOT_UID)) continue;
     const t = e.targetTick;
     if (!t || !t.position || !MODELS.has(t.model)) continue;
-    a[uid] = { x: Math.round(t.position.x), y: Math.round(t.position.y), m: t.model };
-    added++;
+    const x = Math.round(t.position.x), y = Math.round(t.position.y);
+    const cur = a[uid];
+    if (cur && cur.x === x && cur.y === y && cur.m === t.model) continue;
+    a[uid] = { x, y, m: t.model };
+    changed++;
   }
-  if (added) dirty.add(bot.serverId);
+  if (changed) dirty.add(bot.serverId);
   bot._worldSpots = a;
 }
 
@@ -105,19 +160,28 @@ function decodeBansheeDataset(src) {
 }
 
 // Merge a decoded dataset into the atlases — gap-fill only, then persist.
+// Each server's dataset is hashed and remembered: a dataset we've already
+// merged once is skipped, which is what keeps a STALE capture from
+// re-filling an atlas that was wiped after a server reset. The moment the
+// upstream repo ships a fresh capture (different hash), it merges again.
 function mergeDataset(decoded) {
-  let servers = 0, added = 0;
+  let servers = 0, added = 0, skippedStale = 0;
   for (const [serverId, spots] of Object.entries(decoded)) {
+    const h = hashStr(JSON.stringify(spots));
+    const m = meta(serverId);
+    if (m.importHash === h) { skippedStale++; continue; }
     const a = atlas(serverId);
     let n = 0;
     for (const uid in spots) {
       if (!a[uid]) { a[uid] = spots[uid]; n++; }
     }
     if (n) dirty.add(serverId);
+    m.importHash = h;
+    saveMeta(serverId);
     servers++; added += n;
   }
   flush();
-  return { servers, added };
+  return { servers, added, skippedStale };
 }
 
 let syncing = false;
@@ -143,4 +207,5 @@ async function syncFromUpstream() {
 module.exports = {
   collectFromBot, flush, getAtlas, MAX_SPOT_UID,
   decodeBansheeDataset, mergeDataset, syncFromUpstream, UPSTREAM_URL,
+  noteServerTick, wipeServer,
 };

@@ -182,8 +182,14 @@ function _wireBot(bot, userId) {
       if (ws.readyState === 1) ws.send(frame);
     }
   });
-  bot.on("enterWorld", () => {
+  bot.on("enterWorld", (data) => {
     bot._reconnectDelay = 0;   // healthy again → backoff resets
+    // The enter-world packet carries the server's current tick — a drop
+    // vs. the highest tick we've seen means the server reset and its
+    // whole resource layout regenerated (worldSpots wipes the atlas).
+    if (data && Number.isFinite(data.startingTick)) {
+      try { worldSpots.noteServerTick(bot.serverId, data.startingTick); } catch {}
+    }
     stmts.updateSessionStatus.run("in_world", Date.now(), sid);
     userSessionsBroadcast(userId, { op: "sessions", data: listSessionsForUser(userId) });
   });
