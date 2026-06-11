@@ -245,7 +245,7 @@
           title: inParty ? "Open party menu" : "",
         },
           el("span", { class: `ax-row-dot ${suOn ? "on" : ""}`,
-            title: suOn ? "Smart Upgrade ON" : "" }),
+            title: suOn ? "Auto Upgrade ON" : "" }),
           el("span", { class: "ax-row-name", style: "font-weight:500" },
             inParty ? `Party ${pid}` : "No party"),
           el("span", { class: "ax-row-meta" },
@@ -1007,7 +1007,7 @@
     doneSelect.onchange = () => send({ op: "smartUpgradeTuning", args: { whenDone: doneSelect.value } });
 
     main.appendChild(el("div", { class: "ax-card" },
-      el("div", { class: "ax-card-title" }, "smart upgrade"),
+      el("div", { class: "ax-card-title" }, "auto upgrade"),
       el("div", { class: "ax-card-hint" },
         "Economy-first: keeps GoldStash + GoldMines ahead, then towers, then walls. Spends every session's materials and retreats idle bots to their farm spots while saving."),
       el("div", { class: "ax-ctrl-row", style: "padding:8px 0;border:none" },
