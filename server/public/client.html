@@ -348,16 +348,6 @@
           } else if (f.op === "fleet") {
             // Live party fleet (positions + nav) for the in-game overlay.
             window.__axiomFleet = f.data || [];
-          } else if (f.op === "farmState") {
-            // The bot streams its nav/farm state. Stamp a timestamp whenever
-            // it's executing an AUTONOMOUS MOVE — pathing to/from a farm spot
-            // or walking to a resource — so the Take Control button only
-            // appears while there's actually motion to take over. Chopping in
-            // place or sitting idle does NOT count as moving.
-            const d = f.data || {};
-            const moving = d.moving === true ||
-              d.navStatus === "to-farm" || d.navStatus === "returning";
-            if (moving) window.__axiomMoveSignalAt = Date.now();
           } else if (f.op === "error") {
             document.body.insertAdjacentHTML("afterbegin",
               `<div style="position:fixed;top:8px;left:50%;transform:translateX(-50%);background:#f87171;color:#000;padding:6px 14px;border-radius:6px;font:12px var(--font);z-index:99999">attach error: ${f.data?.reason || "unknown"}</div>`);
@@ -511,31 +501,22 @@
       // You attach to a session to DRIVE it, so control starts ON: the
       // input gate (see sendPacket above) lets your movement/aim straight
       // through, and we tell the bot to stop its own inputs immediately
-      // (setControl below) so it doesn't fight you. The button then lets
-      // you RELEASE back to the bot, and take it again whenever you like.
+      // (setControl below) so it doesn't fight you. The button is always
+      // visible so you can release back to the bot, and take it again
+      // whenever you like.
       window.__axiomControl = true;
-      window.__axiomMoveSignalAt = window.__axiomMoveSignalAt || 0;
-      // While you've released to the bot, the button only reappears when
-      // the bot is moving itself (a farmState move signal) — that's when
-      // you'd want to grab the wheel mid-task; it fades ~1.6 s after the
-      // bot stops. While you hold control it stays up so you can release.
-      const AUTO_MOVE_WINDOW = 1600;
-      const isAutoMoving = () => (Date.now() - (window.__axiomMoveSignalAt || 0)) < AUTO_MOVE_WINDOW;
       const ctrlBtn = document.createElement("button");
       const paint = () => {
         const on = window.__axiomControl;
-        const show = on || isAutoMoving();
         ctrlBtn.textContent = on ? "● You're driving — release to bot" : "Take Control";
         ctrlBtn.style.cssText =
           "position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:99999;" +
           "padding:8px 16px;border-radius:10px;cursor:pointer;font:600 13px ui-sans-serif,system-ui,sans-serif;" +
-          "transition:opacity .25s ease;" +
           "backdrop-filter:blur(16px) saturate(160%);-webkit-backdrop-filter:blur(16px) saturate(160%);" +
           "box-shadow:0 6px 18px rgba(0,0,0,0.45),0 0 0 1px rgba(255,255,255,0.08) inset;" +
           (on
             ? "background:linear-gradient(180deg,rgba(74,222,128,0.92),rgba(34,197,94,0.92));color:#04210f;border:1px solid rgba(255,255,255,0.4);"
-            : "background:rgba(20,22,28,0.6);color:#e4e4e7;border:1px solid rgba(255,255,255,0.18);") +
-          (show ? "opacity:1;pointer-events:auto;" : "opacity:0;pointer-events:none;");
+            : "background:rgba(20,22,28,0.6);color:#e4e4e7;border:1px solid rgba(255,255,255,0.18);");
       };
       ctrlBtn.onclick = () => {
         window.__axiomControl = !window.__axiomControl;
@@ -547,8 +528,6 @@
       // Tell the bot to yield right away so the user is driving the moment
       // the session opens (matches __axiomControl = true above).
       try { user.ws.send(JSON.stringify({ op: "setControl", sid, args: { taken: true } })); } catch {}
-      // Re-evaluate visibility as the last move signal ages out.
-      setInterval(paint, 300);
     }
 
     playBtn.onclick = () => {
