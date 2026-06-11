@@ -158,7 +158,7 @@
           if (f.config) state.smartUpgrade = f.config;
           renderSmartUpgrade();
           // Live-refresh the party view if one's open.
-          if (state.selectedParty) updatePartyStatus();
+          if (state.selectedParty) { updatePartyStatus(); updatePartyEconomy(); }
           break;
         case "farmSpot":
           if (f.sid === state.selectedSid) {
@@ -1000,6 +1000,17 @@
     }
     doneSelect.onchange = () => send({ op: "smartUpgradeTuning", args: { whenDone: doneSelect.value } });
 
+    // Economy dashboard — income, gather rate, ETA to the next economy
+    // upgrade, and per-bot efficiency. Placed up top so a stalled party
+    // is obvious at a glance.
+    main.appendChild(el("div", { class: "ax-card" },
+      el("div", { class: "ax-card-title" }, "economy"),
+      el("div", { class: "ax-card-hint" },
+        "Live gold income, gather rate, and projected ETA to the next economy upgrade. Per-bot efficiency flags idle or underperforming sessions."),
+      el("div", { id: "party-economy" })
+    ));
+    updatePartyEconomy();
+
     main.appendChild(el("div", { class: "ax-card" },
       el("div", { class: "ax-card-title" }, "auto upgrade"),
       el("div", { class: "ax-card-hint" },
@@ -1068,6 +1079,78 @@
       html += `<div style="margin-top:6px;font:10px var(--font-mono);color:#86efac">↑ ${g.lastActions.length} upgrade${g.lastActions.length === 1 ? "" : "s"} this tick</div>`;
       for (const a of g.lastActions.slice(0, 5))
         html += `<div style="font:9px var(--font-mono);color:var(--text-dim);padding-left:8px">${a.type} T${a.fromTier}→${a.toTier}</div>`;
+    }
+    root.innerHTML = html;
+  }
+
+  // Human-readable duration for the economy ETA.
+  function fmtDuration(sec) {
+    if (sec == null) return "—";
+    if (sec <= 0) return "ready";
+    if (sec < 60) return `${sec}s`;
+    const m = Math.floor(sec / 60), s = sec % 60;
+    if (m < 60) return s ? `${m}m ${s}s` : `${m}m`;
+    const h = Math.floor(m / 60);
+    return `${h}h ${m % 60}m`;
+  }
+
+  // Repaints the #party-economy block: income/min, gather/min, ETA to the
+  // next economy upgrade, a saver progress bar, and per-bot efficiency.
+  function updatePartyEconomy() {
+    const root = document.getElementById("party-economy");
+    if (!root) return;
+    const g = partyStatusGroup();
+    if (!g || !g.economy) {
+      root.innerHTML = `<div style="color:var(--text-dim);font:11px var(--font)">Enable Auto Upgrade for this party to track economy rates.</div>`;
+      return;
+    }
+    const e = g.economy, next = g.ecoNext;
+    const tile = (label, value, sub) =>
+      `<div style="flex:1;min-width:96px;padding:8px 10px;background:rgba(255,255,255,0.03);border:1px solid var(--glass-divider);border-radius:10px">
+        <div style="font:9px var(--font);letter-spacing:1px;text-transform:uppercase;color:var(--text-dim);margin-bottom:3px">${label}</div>
+        <div style="font:600 15px var(--font-mono);color:var(--text)">${value}</div>
+        ${sub ? `<div style="font:10px var(--font-mono);color:var(--text-dim);margin-top:1px">${sub}</div>` : ""}
+      </div>`;
+    let html = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">`;
+    html += tile("Gold / min", fmtShort(e.goldPerMin || 0));
+    html += tile("Materials / min", fmtShort(e.matsPerMin || 0));
+    html += next
+      ? tile("Next upgrade", fmtDuration(e.etaSec), `${next.type} T${next.toTier} · ${fmtShort(next.gold)}g`)
+      : tile("Next upgrade", "maxed", "economy complete");
+    html += `</div>`;
+
+    // Saver progress toward the next economy upgrade.
+    if (next && next.gold > 0) {
+      const pct = Math.max(0, Math.min(100, (next.saverGold / next.gold) * 100));
+      html += `<div style="margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;font:10px var(--font-mono);color:var(--text-mute);margin-bottom:3px">
+          <span>saver: ${next.saverLabel || "—"}</span><span>${fmtShort(next.saverGold)} / ${fmtShort(next.gold)}g</span>
+        </div>
+        <div style="height:6px;border-radius:999px;background:rgba(255,255,255,0.08);overflow:hidden">
+          <div style="height:100%;width:${pct.toFixed(0)}%;border-radius:999px;background:#fcd34d;transition:width .3s"></div>
+        </div>
+      </div>`;
+    }
+
+    // Per-bot efficiency ranking (gold/min + mats/min), idle flagged red.
+    if (g.materials && g.materials.length) {
+      const bots = g.materials.slice().sort((a, b) =>
+        ((b.goldPerMin || 0) + (b.matsPerMin || 0)) - ((a.goldPerMin || 0) + (a.matsPerMin || 0)));
+      const maxScore = Math.max(1, ...bots.map((b) => (b.goldPerMin || 0) + (b.matsPerMin || 0)));
+      html += `<div style="font:9px var(--font);color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">per-bot efficiency</div>`;
+      for (const b of bots) {
+        const score = (b.goldPerMin || 0) + (b.matsPerMin || 0);
+        const pct = (score / maxScore) * 100, idle = score < 1;
+        html += `<div style="margin:3px 0">
+          <div style="display:flex;justify-content:space-between;font:10px var(--font-mono);color:${idle ? "var(--text-dim)" : "var(--text-mute)"};margin-bottom:2px">
+            <span>${b.label}${b.farming ? ` <span style="color:#86efac">⛏</span>` : ""}${idle ? ` <span style="color:var(--danger)">idle</span>` : ""}</span>
+            <span>${fmtShort(b.goldPerMin || 0)}g · ${fmtShort(b.matsPerMin || 0)}m</span>
+          </div>
+          <div style="height:4px;border-radius:999px;background:rgba(255,255,255,0.06);overflow:hidden">
+            <div style="height:100%;width:${pct.toFixed(0)}%;border-radius:999px;background:${idle ? "var(--danger)" : "#7dd3fc"};transition:width .3s"></div>
+          </div>
+        </div>`;
+      }
     }
     root.innerHTML = html;
   }

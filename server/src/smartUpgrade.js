@@ -227,6 +227,37 @@ function createCoordinator({ getBots, sendToUser }) {
   const lastUpgradeAt = new Map();
   // bot.id -> last pickaxe-buy timestamp (cooldown until inventory updates)
   const lastPickaxeAt = new Map();
+  // bot.id -> rolling window of {t, gold, wood, stone} samples for the
+  // economy dashboard (income/min, gather/min, ETA-to-next-upgrade).
+  const ecoSamples = new Map();
+  const ECO_WINDOW = 75;   // ~75 samples ≈ 75 s at the 1 Hz tick
+
+  // Push a material sample for `bot` and return its rolling rates. Income
+  // and gather use POSITIVE deltas only (gold spent / materials consumed
+  // don't count against the earn rate); goldNetPerSec is the raw trend
+  // used to project the saver's ETA to the next economy upgrade.
+  function sampleEconomy(bot, now) {
+    const p = bot.myPlayer;
+    if (!p) return { goldPerMin: 0, matsPerMin: 0, goldNetPerSec: 0 };
+    let arr = ecoSamples.get(bot.id);
+    if (!arr) { arr = []; ecoSamples.set(bot.id, arr); }
+    arr.push({ t: now, gold: p.gold || 0, wood: p.wood || 0, stone: p.stone || 0 });
+    if (arr.length > ECO_WINDOW) arr.shift();
+    if (arr.length < 2) return { goldPerMin: 0, matsPerMin: 0, goldNetPerSec: 0 };
+    let gUp = 0, mUp = 0;
+    for (let i = 1; i < arr.length; i++) {
+      const dg = arr[i].gold - arr[i - 1].gold;
+      if (dg > 0) gUp += dg;
+      const dm = (arr[i].wood - arr[i - 1].wood) + (arr[i].stone - arr[i - 1].stone);
+      if (dm > 0) mUp += dm;
+    }
+    const spanSec = Math.max(1, (arr[arr.length - 1].t - arr[0].t) / 1000);
+    return {
+      goldPerMin: Math.round((gUp / spanSec) * 60),
+      matsPerMin: Math.round((mUp / spanSec) * 60),
+      goldNetPerSec: (arr[arr.length - 1].gold - arr[0].gold) / spanSec,
+    };
+  }
   // partyId -> timestamp the group entered the "saving" state (no bot can
   // afford the next pending upgrade). Used to debounce saving→farm so it
   // doesn't flip every tick.
@@ -1074,6 +1105,30 @@ function createCoordinator({ getBots, sendToUser }) {
       }
       const ts = tierStats(buildings);
       const farmGoal = farmThresholds(ts.ecoMin, ts.restMax);
+
+      // ── Economy rates (dashboard) ──
+      // Sample every bot's materials this tick and fold the rolling rates
+      // into the per-bot list. Party totals + the saver's ETA to the next
+      // economy upgrade ride alongside.
+      const rateById = new Map();
+      let partyGoldPerMin = 0, partyMatsPerMin = 0, saverNetPerSec = 0;
+      for (const bot of group) {
+        const r = sampleEconomy(bot, now);
+        rateById.set(bot.id, r);
+        partyGoldPerMin += r.goldPerMin;
+        partyMatsPerMin += r.matsPerMin;
+        if (saver && bot.id === saver.id) saverNetPerSec = r.goldNetPerSec;
+      }
+      // ETA: how long until the saver can fund the next economy upgrade,
+      // projected from its observed net-gold trend. Only meaningful while
+      // it's actually climbing toward the target.
+      let etaSec = null;
+      if (ecoTarget && saver) {
+        const remaining = ecoTarget.cost.gold - (saver.myPlayer.gold | 0);
+        if (remaining <= 0) etaSec = 0;
+        else if (saverNetPerSec > 0.5) etaSec = Math.round(remaining / saverNetPerSec);
+      }
+
       statusGroups.push({
         partyId,
         members: group.length,
@@ -1089,15 +1144,25 @@ function createCoordinator({ getBots, sendToUser }) {
           saverLabel: saver ? saver.label : null,
           saverGold: saver ? (saver.myPlayer.gold | 0) : 0,
         } : null,
+        // Live economy rates for the dashboard panel.
+        economy: {
+          goldPerMin: partyGoldPerMin,
+          matsPerMin: partyMatsPerMin,
+          etaSec,
+        },
         farmFloor: farmGoal.floor, farmCeil: farmGoal.ceil,
         buildings: buildings.length,
         summary,
-        materials: group.map((bot) => ({
-          sid: bot.id, label: bot.label,
-          gold: bot.myPlayer.gold | 0, wood: bot.myPlayer.wood | 0,
-          stone: bot.myPlayer.stone | 0, token: bot.myPlayer.token | 0,
-          farming: !!bot._coordFarming,
-        })),
+        materials: group.map((bot) => {
+          const r = rateById.get(bot.id) || { goldPerMin: 0, matsPerMin: 0 };
+          return {
+            sid: bot.id, label: bot.label,
+            gold: bot.myPlayer.gold | 0, wood: bot.myPlayer.wood | 0,
+            stone: bot.myPlayer.stone | 0, token: bot.myPlayer.token | 0,
+            farming: !!bot._coordFarming,
+            goldPerMin: r.goldPerMin, matsPerMin: r.matsPerMin,
+          };
+        }),
         lastActions: actions,
       });
       } catch (ePart) {
@@ -1133,6 +1198,10 @@ function createCoordinator({ getBots, sendToUser }) {
     for (const [k, t] of lastPetAt)       if (now - t > STALE_TS_MS) lastPetAt.delete(k);
     for (const [k, t] of lastHarvPlaceAt) if (now - t > STALE_TS_MS) lastHarvPlaceAt.delete(k);
     for (const [k, t] of lastHarvFeedAt)  if (now - t > STALE_TS_MS) lastHarvFeedAt.delete(k);
+    // Economy samples: drop a bot's buffer once its newest sample is stale.
+    for (const [k, arr] of ecoSamples) {
+      if (!arr.length || now - arr[arr.length - 1].t > STALE_TS_MS) ecoSamples.delete(k);
+    }
     // Drop per-party state for parties no bot is in anymore.
     for (const pid of savingSince.keys()) if (!activeParties.has(pid)) savingSince.delete(pid);
     for (const pid of baseMemory.keys())  if (!activeParties.has(pid)) baseMemory.delete(pid);
