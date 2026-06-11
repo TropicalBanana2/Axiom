@@ -88,4 +88,4 @@ is based off of Banshee and the reason I created this was to not fry
 my eyes every time I looked at the Banshee UI.
 
 ## Questions
-Should you have any questions or want to report an issue you can contact Goonicks
+Should you have any questions or want to report an issue you can contact Goonicks on discord
