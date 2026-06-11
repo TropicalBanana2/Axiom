@@ -171,15 +171,30 @@ function approachPoint(bx, by, ref) {
 // multiple of that cost (so pickaxe never starves building upgrades).
 const PICK_HARVEST = [0, 1.5, 3, 3, 4.5, 4.5, 6, 9];   // index = tier
 const PICK_STEP_COST = [0, 1000, 3000, 6000, 8000, 24000, 90000]; // [t] = t→t+1
-const PICKAXE_GPH_MAX = 8000;       // max gold per +1 harvest worth paying (scales with mine tier)
-const PICKAXE_COOLDOWN_MS = 4000;   // per-bot, until inventory confirms
+// Pickaxe spending is deliberately STINGY — gold is far better spent on
+// the base, and the high pickaxe tiers are terrible value:
+//   1→2  1000g / +1.5 =    667 g/harvest  ✓ great
+//   2→4  9000g / +1.5 =  6000 g/harvest   ~ ok when farming hard
+//   4→6 32000g / +1.5 = 21333 g/harvest   ✗ poor
+//   6→7 90000g / +3   = 30000 g/harvest   ✗ worst single buy in the game
+// So: a low base cap on gold-per-+harvest that only loosens with a strong
+// economy, and a big surplus buffer so a buy never competes with building
+// upgrades. Net effect vs. the old code: roughly tier-4 pickaxes on a
+// modest base, higher only once the economy is genuinely rich.
+const PICKAXE_GPH_BASE = 3500;      // base max gold per +1 harvest
+const PICKAXE_GPH_PER_MINE = 1500;  // +cap per top-GoldMine tier
+const PICKAXE_GPH_CAP = 16000;      // absolute ceiling (emerald lifts this)
+const PICKAXE_BUFFER = 3;           // need cost×this beyond the reserve before buying
+const PICKAXE_COOLDOWN_MS = 8000;   // per-bot, until inventory confirms (was 4s)
 
 // Returns the cost to reach the next harvest-increasing tier, or null if
 // upgrading isn't worth it from `tier` with `gold` on hand.
-//   gphMax  — max gold per +1 harvest we'll pay (Infinity = ignore, force-max).
-//   reserve — gold to keep untouched (the next GoldStash upgrade cost), so a
-//             pickaxe buy never eats into what the base is saving for.
-function pickaxeWorthIt(tier, gold, gphMax, reserve) {
+//   gphMax  — max gold per +1 harvest we'll pay.
+//   reserve — gold to keep untouched (the next GoldStash upgrade cost).
+//   buffer  — require gold ≥ cost×buffer + reserve, so a pickaxe buy only
+//             happens when the bot is genuinely flush, never draining gold
+//             the base could be spending on buildings.
+function pickaxeWorthIt(tier, gold, gphMax, reserve, buffer) {
   if (tier >= 7) return null;
   const curH = PICK_HARVEST[tier];
   // Walk forward to the next tier with strictly more harvest.
@@ -188,7 +203,7 @@ function pickaxeWorthIt(tier, gold, gphMax, reserve) {
   if (PICK_HARVEST[nt] <= curH) return null;       // no improvement reachable
   const gain = PICK_HARVEST[nt] - curH;
   if (cost / gain > gphMax) return null;           // too pricey per +harvest
-  if (gold < cost + reserve) return null;          // keep the stash's gold untouched
+  if (gold < cost * buffer + reserve) return null; // need a real surplus
   return cost;
 }
 
@@ -242,12 +257,15 @@ function createCoordinator({ getBots, sendToUser }) {
     const gold = (bot.myPlayer && bot.myPlayer.gold) || 0;
     const lvl = mineTier || 0;
     const emerald = lvl >= EMERALD_MINE_TIER;
-    // Emerald mines → ignore the cost-per-harvest cap so the pickaxe reaches
-    // max. Otherwise the cap grows with mine tier (~8k/+harvest at tier 1).
-    // Either way, ALWAYS keep the next stash upgrade's gold in reserve so
-    // pickaxe buying never drains what the base is saving for the stash.
-    const gphMax = emerald ? Infinity : PICKAXE_GPH_MAX * Math.max(1, lvl);
-    if (pickaxeWorthIt(tier, gold, gphMax, stashReserve || 0) == null) return;
+    // Cap on gold-per-+harvest grows gently with the top mine tier and is
+    // ceilinged; emerald mines (income is overflowing) lift the ceiling so
+    // the pickaxe can finally reach max, but still behind the surplus
+    // buffer. ALWAYS keep the next stash upgrade's gold in reserve.
+    const gphMax = emerald
+      ? 40000   // enough to allow the 6→7 (30k/harvest) step when truly rich
+      : Math.min(PICKAXE_GPH_CAP, PICKAXE_GPH_BASE + PICKAXE_GPH_PER_MINE * lvl);
+    const buffer = emerald ? 2 : PICKAXE_BUFFER;
+    if (pickaxeWorthIt(tier, gold, gphMax, stashReserve || 0, buffer) == null) return;
     try {
       bot.sendRpc("BuyItem",  { itemName: "Pickaxe", tier: tier + 1 });
       bot.sendRpc("EquipItem", { itemName: "Pickaxe", tier: tier + 1 });

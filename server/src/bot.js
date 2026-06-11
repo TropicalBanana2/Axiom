@@ -351,6 +351,11 @@ class Bot extends EventEmitter {
     this.ws = new WebSocket(`wss://${this.server.hostname}`, {
       headers: { Origin: "", "User-Agent": "Mozilla/5.0 (Axiom)", Host: this.server.host },
       servername: this.server.host,
+      // Fail a dead-server connect in 12 s instead of hanging on the OS
+      // default TCP timeout (~21 s on Windows) — the reconnect backoff
+      // then takes over promptly instead of the fleet piling up on a
+      // dozen stuck sockets.
+      handshakeTimeout: 12000,
     });
     this.ws.binaryType = "arraybuffer";
     this.ws.on("open", () => this.emit("open"));

@@ -71,6 +71,27 @@ function bindServer() {
   wss.on("connection", handleConnection);
 }
 
+// Set during graceful shutdown so the per-bot close handlers stop
+// scheduling reconnects (the process is about to exit anyway).
+let shuttingDown = false;
+
+// Network errors that are EXPECTED while a zombs server is down, mid-reset,
+// or while we're tearing a socket down — these should not be logged per
+// attempt. The reconnect backoff in bot.on("close") handles them.
+const ROUTINE_NET_CODES = new Set([
+  "ETIMEDOUT", "ENOTFOUND", "ECONNREFUSED", "EHOSTUNREACH",
+  "ECONNRESET", "EAI_AGAIN", "EPIPE", "UND_ERR_CONNECT_TIMEOUT",
+]);
+function isRoutineNetError(err) {
+  if (!err) return true;
+  if (err.code && ROUTINE_NET_CODES.has(err.code)) return true;
+  const m = (err.message || "").toLowerCase();
+  return m.includes("closed before the connection") ||  // close() during CONNECTING
+         m.includes("opening handshake has timed out") || // handshakeTimeout
+         m.includes("etimedout") || m.includes("enotfound") ||
+         m.includes("econnrefused") || m.includes("ehostunreach");
+}
+
 // In-memory state.
 const bots = new Map();              // axiom sid -> Bot instance
 const subscribersBySid = new Map();  // sid -> Set<ws>
@@ -195,10 +216,12 @@ function _wireBot(bot, userId) {
   });
   bot.on("close", () => {
     // User-initiated close (the "close" op flips autoReconnect off
-    // first) → mark closed and forget the session.
-    if (!bot.behaviours.autoReconnect) {
-      stmts.updateSessionStatus.run("closed", Date.now(), sid);
-      userSessionsBroadcast(userId, { op: "closed", data: { id: sid } });
+    // first), or a process shutdown → mark closed and forget the session.
+    if (!bot.behaviours.autoReconnect || shuttingDown) {
+      if (!shuttingDown) {
+        stmts.updateSessionStatus.run("closed", Date.now(), sid);
+        userSessionsBroadcast(userId, { op: "closed", data: { id: sid } });
+      }
       bots.delete(sid);
       subscribersBySid.delete(sid);
       return;
@@ -214,18 +237,28 @@ function _wireBot(bot, userId) {
     stmts.updateSessionStatus.run("connecting", Date.now(), sid);
     userSessionsBroadcast(userId, { op: "sessions", data: listSessionsForUser(userId) });
     const delay = bot._reconnectDelay;
-    console.log(`[bot ${sid}] disconnected — reconnecting in ${Math.round(delay / 1000)}s`);
+    // Log only the FIRST drop of a streak — a long server outage otherwise
+    // fills the log with one line per bot per attempt. A successful
+    // enter-world resets _reconnectDelay to 0, so the next drop logs again.
+    if (delay <= 3000) console.log(`[bot ${sid}] disconnected — auto-reconnecting (backoff to 60s)`);
     setTimeout(() => {
-      if (bots.get(sid) !== bot) return;            // closed/replaced meanwhile
-      if (!bot.behaviours.autoReconnect) return;    // user closed during the wait
+      if (bots.get(sid) !== bot || shuttingDown) return;  // closed/replaced/exiting
+      if (!bot.behaviours.autoReconnect) return;          // user closed during the wait
       try { bot.start(); }
       catch (e) {
-        console.error(`[bot ${sid}] reconnect failed:`, e.message);
+        if (!isRoutineNetError(e)) console.error(`[bot ${sid}] reconnect failed:`, e.message);
         bot.emit("close");                          // re-enter backoff
       }
     }, delay);
   });
-  bot.on("error", (err) => console.error(`[bot ${sid}]`, err.message));
+  bot.on("error", (err) => {
+    // Routine connection failures (server down / mid-reset / shutdown) are
+    // expected — the close handler owns the reconnect and its single log
+    // line, so swallow these to avoid one stack per attempt across the
+    // whole fleet. Only genuinely unexpected errors get logged.
+    if (isRoutineNetError(err)) return;
+    console.error(`[bot ${sid}]`, err && err.message);
+  });
 }
 
 function spawnBot(userId, { label, serverId, playerName, psk }) {
@@ -701,6 +734,7 @@ spotsDailySync.unref && spotsDailySync.unref();
 // Graceful shutdown — close every bot's socket cleanly, then exit.
 // Rows are left as-is; the next process boot will purgeStaleSessions().
 function gracefulExit() {
+  shuttingDown = true;
   for (const bot of bots.values()) bot.stop();
   if (wss) wss.close();
   setTimeout(() => process.exit(0), 300);
