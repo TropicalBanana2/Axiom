@@ -1,10 +1,7 @@
 # Axiom
 
 Self-hosted bot management and scripting console for
-[zombs.io](https://zombs.io). Run headless bots that stay logged in after
-your browser closes, drive them from a dashboard, and script the in-game
-panel from a single JSON schema.
-
+[zombs.io](https://zombs.io).
 ## Quick start
 
 ```sh
@@ -20,10 +17,6 @@ Then open **http://localhost/**.
   and configure the smart-upgrade coordinator.
 - **`/play`** — the modded zombs.io client (attach a session to drive
   it live, or play yourself with the in-game panel).
-
-Axiom runs in **no-login local mode** — it's meant to be run on your own
-machine for your own use, so there's no account system. The single
-local user is provisioned automatically on first boot.
 
 > **Port 80 on Windows** may need admin, or set a different port:
 > `AXIOM_HTTP_PORT=8080 npm start`.
@@ -57,17 +50,25 @@ engine docs, and the wire protocol.
 
 ---
 
-## Layout
+## Smart Upgrade Setup
+- Spawn in a party
+- Attach to the party
+- Find a spot to farm and go into the in game menu 
+- Click smart upgrade setup and then click a wood and stone on your screen, they should be overlapping
+- After that if you reliquish control the bots should go to farm.
+- Once you have the resources build the base.
+- make sure you take back control
+- Bring all the bots into the base (be smart where you put them, specifically out of the way of any bosses)
+- the spot you put them in will be an anchor point
+- Go to the party manager menu and click on the slide toggle to enable smart upgrade
+- give control back to the sessions
+- Optionally save the farming location for ease of access later
 
-```
-axiom/
-└── server/             the product — see server/README.md
-    ├── src/            localhost (:80), sessions (:8090), sockets (:8100)
-    ├── public/         dashboard, /play page, assets
-    └── data/           SQLite db + JWT secret (gitignored)
-```
-
----
+## Some notes
+- Don't have a farming spot close enough to the base the zombies will get it
+- know to use the take control / release to bot in the top of the menus
+- Good rule of thumb is if you want the bot to do something give it control
+- You can zoom out to find farming spots faster
 
 ## Privacy
 
@@ -82,3 +83,9 @@ copyrighted by the game's authors and are included only to make the
 modded `/play` page work locally — they are not original to this
 project. If zombs.io ships a new client, re-copy these from a fresh
 install.
+`server/public/asset/pictures` belong to Banshee, a lot of the client
+is based off of Banshee and the reason I created this was to not fry
+my eyes every time I looked at the Banshee UI.
+
+## Questions
+Should you have any questions or want to report an issue you can contact Goonicks
