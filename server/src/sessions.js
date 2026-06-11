@@ -329,6 +329,11 @@ const handleConnection = (ws) => {
     for (const sid of ws.attached) {
       const subs = subscribersBySid.get(sid);
       if (subs) subs.delete(ws);
+      // Hand control back to the bot once the LAST attached browser is
+      // gone, so it resumes its tasks instead of staying frozen after the
+      // tab closes. (Control now defaults ON when a session is opened.)
+      const bot = bots.get(sid);
+      if (bot && (!subs || subs.size === 0)) bot._userControlling = false;
     }
     if (ws.observers) {
       for (const sid of ws.observers) {
@@ -422,6 +427,9 @@ function handleJsonFrame(ws, raw, authTimer) {
       const subs = subscribersBySid.get(sid);
       if (subs) subs.delete(ws);
       ws.attached.delete(sid);
+      // Resume autonomy once the last attached browser detaches.
+      const bot = bots.get(sid);
+      if (bot && (!subs || subs.size === 0)) bot._userControlling = false;
       break;
     }
 

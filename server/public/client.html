@@ -508,17 +508,17 @@
       const ws = user.ws;  // alias for the rest of this scope
 
       // ── "Take Control" button ──────────────────────────────────────
-      // Until pressed, window.__axiomControl is false and the input gate
-      // (see sendPacket above) drops all movement/aim so the bot drives
-      // itself undisturbed. Pressing it tells the bot to stop its own
-      // inputs (setControl) and lets the user's inputs through.
-      window.__axiomControl = false;
+      // You attach to a session to DRIVE it, so control starts ON: the
+      // input gate (see sendPacket above) lets your movement/aim straight
+      // through, and we tell the bot to stop its own inputs immediately
+      // (setControl below) so it doesn't fight you. The button then lets
+      // you RELEASE back to the bot, and take it again whenever you like.
+      window.__axiomControl = true;
       window.__axiomMoveSignalAt = window.__axiomMoveSignalAt || 0;
-      // The button is only useful while the bot is moving itself — that's
-      // when you'd want to grab the wheel. A move signal (set in the
-      // farmState handler above) keeps it visible; ~1.6 s after the bot
-      // stops moving the button fades out. While you hold control it stays
-      // up regardless, so you can always release.
+      // While you've released to the bot, the button only reappears when
+      // the bot is moving itself (a farmState move signal) — that's when
+      // you'd want to grab the wheel mid-task; it fades ~1.6 s after the
+      // bot stops. While you hold control it stays up so you can release.
       const AUTO_MOVE_WINDOW = 1600;
       const isAutoMoving = () => (Date.now() - (window.__axiomMoveSignalAt || 0)) < AUTO_MOVE_WINDOW;
       const ctrlBtn = document.createElement("button");
@@ -544,6 +544,9 @@
       };
       paint();
       document.body.appendChild(ctrlBtn);
+      // Tell the bot to yield right away so the user is driving the moment
+      // the session opens (matches __axiomControl = true above).
+      try { user.ws.send(JSON.stringify({ op: "setControl", sid, args: { taken: true } })); } catch {}
       // Re-evaluate visibility as the last move signal ages out.
       setInterval(paint, 300);
     }
