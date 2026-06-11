@@ -329,8 +329,8 @@
   }
 
   // ----- Farm Observer panel -----
-  // Renders the bot's autoFarm state into the session-detail view.
-  // Called fresh by renderMain() AND on every farmState envelope so
+  // Renders the bot's Smart Farm / navigation state into the session-detail
+  // view. Called fresh by renderMain() AND on every farmState envelope so
   // the panel updates in place without re-rendering the whole detail.
   function updateFarmObserver() {
     const root = document.getElementById("farm-observer");
@@ -339,9 +339,9 @@
     if (!s) {
       root.innerHTML = `<div style="color: var(--text-dim); font: 11px var(--font); line-height: 1.6">
         <div style="color: var(--text-mute); margin-bottom: 4px; font-size: 12px;">Waiting for bot</div>
-        Updates only while <b style="color:var(--text)">Auto Farm</b> is on
-        for the selected session. Toggle Auto Farm in the
-        session's behaviours panel.
+        Updates while this session is farming a Smart Farm spot. Set one up
+        with <b style="color:var(--text)">Smart Farm Setup</b> in the in-game
+        panel, then assign the party.
       </div>`;
       return;
     }
@@ -784,12 +784,6 @@
 
     item("▶  Open session", () => { openOrFocusAttach(botId); closeBotMenu(); });
 
-    const farmOn = session && session.behaviours && session.behaviours.autoFarm;
-    item(farmOn ? "✓  Auto farmer (on)" : "⛏  Enable auto farmer", () => {
-      send({ sid: botId, op: "setBehaviour", args: { key: "autoFarm", value: !farmOn } });
-      closeBotMenu();
-    });
-
     // ── Bring other sessions here (expandable, default none selected) ──
     const bringBtn = item(
       "↪  Bring other sessions here" + (others.length ? "" : "  (none)"),
@@ -1182,7 +1176,7 @@
     // -------- Behaviour toggles --------
     // Right under the stats: these are what you actually flip day to day.
     const beh = s.behaviours || {};
-    const behaviourRows = ["autoFarm", "autoReconnect", "autoHeal", "autoRevive",
+    const behaviourRows = ["autoReconnect", "autoHeal", "autoRevive",
                            "autoRefiller", "autoBreakIn", "autoaim", "autobow"].map((key) => {
       const t = el("button", { class: `ax-toggle ${beh[key] ? "on" : ""}`, "data-key": key });
       t.onclick = () => {
@@ -1337,7 +1331,7 @@
     const target = sid || "v5001";
     c.appendChild(el("div", { class: "ax-card-hint", style: "margin: 0 0 8px" },
       "target: ", el("strong", {}, target)));
-    for (const flag of ["autoRefiller", "autoReconnect", "autoFarm", "autoBreakIn"]) {
+    for (const flag of ["autoRefiller", "autoReconnect", "autoBreakIn"]) {
       const cur = state.flags.find((f) => f.server_id === target && f.flag === flag);
       const on = cur && cur.value;
       const t = el("button", { class: `ax-toggle ${on ? "on" : ""}` });
