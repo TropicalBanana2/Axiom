@@ -1,48 +1,49 @@
-// spotFinder.js — ideal farm + base spot finder.
+// spotFinder.js — ideal base + farm spot finder.
 //
-// Given a server's known resource spots (the worldSpots atlas) and the
-// enemy base positions (the community scanner), rank the best places to
-// set up: a tight tree+stone PAIR a single bot can farm both halves of,
-// next to a large OPEN AREA clear enough to drop a base, and far from any
-// existing base.
+// Strategy (per request): find the SPOT first, then the farm. We grid the
+// map for genuinely open, safe base sites (clear of resources, far from
+// enemy bases), and only then attach the nearest eligible tree+stone farm
+// pair to each. A site with no farmable pair within shuttle range is
+// dropped. This prioritises base quality, then farm proximity.
+//
+// A farm pair is "eligible" only when the tree and stone OVERLAP tightly
+// (gap <= FARM_PAIR_MAX) so a single bot reaches both halves.
 //
 // Pure over its inputs so it's trivially testable; the endpoint feeds it
-// the live atlas + scanner stashes. Only meaningful when the server's
-// spots are actually exposed (a non-empty atlas).
+// the live worldSpots atlas + the community-scanner stashes. Meaningful
+// only where the server's spots are exposed (a non-empty atlas).
 
 const MAP_SIZE = 24000;
-const EDGE_MARGIN = 250;          // keep the base off the map border
+const EDGE_MARGIN = 300;          // keep the base off the map border
 
-const FARM_PAIR_MAX = 200;        // tree↔stone gap a single bot can farm both
-const TOP_PAIRS = 120;            // only open-area-search the tightest pairs
+const FARM_PAIR_MAX = 95;         // tree↔stone gap for a single bot (overlap)
 
-const BASE_SEARCH_MIN = 280;      // look for open ground this far from the farm…
-const BASE_SEARCH_MAX = 1000;     // …out to here
-const BASE_SEARCH_STEP = 110;
-const BASE_CLEAR_MIN = 340;       // open area must clear obstacles by ≥ this
-const SAFE_BASE_DIST = 700;       // …and sit ≥ this from any enemy base
+const GRID_STEP = 220;            // open-site sampling resolution
+const BASE_CLEAR_MIN = 340;       // a base site must clear resources by >= this
+const SAFE_BASE_DIST = 700;       // …and sit >= this from any enemy base
+const FARM_NEAR_BASE = 1000;      // …with a farm pair within this (shuttle range)
 
-const MERGE_DIST = 650;           // collapse candidates whose base areas overlap
+const MERGE_DIST = 700;           // collapse base sites whose areas overlap
 const RETURN_N = 8;
 
 function nearest(px, py, pts) {
   let best = Infinity;
   for (const p of pts) {
     const dx = p.x - px, dy = p.y - py;
-    const d = Math.sqrt(dx * dx + dy * dy);
+    const d = dx * dx + dy * dy;          // squared — sqrt once at the end
     if (d < best) best = d;
   }
-  return best;
+  return Math.sqrt(best);
 }
 
 // Clearance to the nearest RESOURCE (tree/stone/camp) or the map edge —
-// i.e. how much open room a base centred here would have.
+// how much open room a base centred here would have.
 function resourceClearance(px, py, spots) {
   const edge = Math.min(px, MAP_SIZE - px, py, MAP_SIZE - py);
   return Math.min(edge, nearest(px, py, spots));
 }
 
-// Find and rank ideal farm+base spots.
+// Find and rank ideal base+farm spots.
 //   spots: [{ x, y, m }]  resource atlas (Tree/Stone/NeutralCamp)
 //   bases: [{ x, y }]     enemy stash positions to avoid
 function findSpots(spots, bases, opts = {}) {
@@ -51,72 +52,63 @@ function findSpots(spots, bases, opts = {}) {
   bases = (bases || []).filter((b) => b && Number.isFinite(b.x) && Number.isFinite(b.y));
   if (spots.length === 0) return [];
 
+  // 1) Eligible farm pairs — tightly overlapping tree+stone.
   const trees = spots.filter((s) => s.m === "Tree");
   const stones = spots.filter((s) => s.m === "Stone");
-
-  // 1) Tree+stone pairs a single bot can farm (both within one stand).
-  const pairs = [];
+  const farms = [];
   for (const t of trees) {
     for (const s of stones) {
       const dx = t.x - s.x, dy = t.y - s.y;
       const gap = Math.sqrt(dx * dx + dy * dy);
       if (gap <= FARM_PAIR_MAX) {
-        pairs.push({ t, s, gap, mid: { x: (t.x + s.x) / 2, y: (t.y + s.y) / 2 } });
+        farms.push({ t, s, gap, mid: { x: (t.x + s.x) / 2, y: (t.y + s.y) / 2 } });
       }
     }
   }
-  if (pairs.length === 0) return [];
-  pairs.sort((a, b) => a.gap - b.gap);
-  const candidatePairs = pairs.slice(0, TOP_PAIRS);
+  if (farms.length === 0) return [];
 
-  // 2) For each pair, hunt the clearest base spot in a ring around it.
-  const candidates = [];
-  for (const pair of candidatePairs) {
-    let best = null;
-    for (let r = BASE_SEARCH_MIN; r <= BASE_SEARCH_MAX; r += BASE_SEARCH_STEP) {
-      for (let a = 0; a < 360; a += 24) {
-        const rad = (a * Math.PI) / 180;
-        const bx = pair.mid.x + Math.cos(rad) * r;
-        const by = pair.mid.y + Math.sin(rad) * r;
-        if (bx < EDGE_MARGIN || bx > MAP_SIZE - EDGE_MARGIN ||
-            by < EDGE_MARGIN || by > MAP_SIZE - EDGE_MARGIN) continue;
-        const clr = resourceClearance(bx, by, spots);
-        if (clr < BASE_CLEAR_MIN) continue;
-        const baseDist = bases.length ? nearest(bx, by, bases) : Infinity;
-        if (baseDist < SAFE_BASE_DIST) continue;
-        // Reward open room + distance from enemy bases; penalise a loose
-        // farm pair and a base placed far from its farm (extra walking).
-        const safety = Math.min(baseDist, 3000);
-        const walk = Math.hypot(bx - pair.mid.x, by - pair.mid.y);
-        const score = clr * 1.4 + safety * 0.4 - pair.gap * 0.8 - walk * 0.25;
-        if (!best || score > best.score) {
-          best = { x: Math.round(bx), y: Math.round(by), clr, baseDist, score };
-        }
+  // 2) Grid the map for open, safe base sites; attach the nearest farm.
+  const sites = [];
+  for (let gx = EDGE_MARGIN; gx <= MAP_SIZE - EDGE_MARGIN; gx += GRID_STEP) {
+    for (let gy = EDGE_MARGIN; gy <= MAP_SIZE - EDGE_MARGIN; gy += GRID_STEP) {
+      const clr = resourceClearance(gx, gy, spots);
+      if (clr < BASE_CLEAR_MIN) continue;
+      const baseDist = bases.length ? nearest(gx, gy, bases) : Infinity;
+      if (baseDist < SAFE_BASE_DIST) continue;
+      // 3) Nearest eligible farm to this site.
+      let farm = null, fd = Infinity;
+      for (const f of farms) {
+        const d = Math.hypot(gx - f.mid.x, gy - f.mid.y);
+        if (d < fd) { fd = d; farm = f; }
       }
+      if (fd > FARM_NEAR_BASE) continue;     // no farm reachable from here
+      const safety = Math.min(baseDist, 3000);
+      const score = clr * 1.4 + safety * 0.4 - fd * 0.5 - farm.gap * 0.6;
+      sites.push({ x: gx, y: gy, clr, baseDist, farm, fd, score });
     }
-    if (!best) continue;
-    candidates.push({
-      farm: {
-        tree: { x: Math.round(pair.t.x), y: Math.round(pair.t.y) },
-        stone: { x: Math.round(pair.s.x), y: Math.round(pair.s.y) },
-        mid: { x: Math.round(pair.mid.x), y: Math.round(pair.mid.y) },
-        gap: Math.round(pair.gap),
-      },
-      base: { x: best.x, y: best.y, clearance: Math.round(best.clr) },
-      distToNearestBase: Number.isFinite(best.baseDist) ? Math.round(best.baseDist) : null,
-      score: Math.round(best.score),
-    });
   }
+  if (sites.length === 0) return [];
 
-  // 3) Dedupe overlapping base areas (keep the highest score), then rank.
-  candidates.sort((a, b) => b.score - a.score);
+  // 4) Rank, dedupe overlapping base areas, shape the result.
+  sites.sort((a, b) => b.score - a.score);
   const kept = [];
-  for (const c of candidates) {
-    if (kept.some((k) => Math.hypot(k.base.x - c.base.x, k.base.y - c.base.y) < MERGE_DIST)) continue;
-    kept.push(c);
+  for (const s of sites) {
+    if (kept.some((k) => Math.hypot(k.x - s.x, k.y - s.y) < MERGE_DIST)) continue;
+    kept.push(s);
     if (kept.length >= returnN) break;
   }
-  return kept;
+  return kept.map((s) => ({
+    base: { x: Math.round(s.x), y: Math.round(s.y), clearance: Math.round(s.clr) },
+    farm: {
+      tree: { x: Math.round(s.farm.t.x), y: Math.round(s.farm.t.y) },
+      stone: { x: Math.round(s.farm.s.x), y: Math.round(s.farm.s.y) },
+      mid: { x: Math.round(s.farm.mid.x), y: Math.round(s.farm.mid.y) },
+      gap: Math.round(s.farm.gap),
+    },
+    distBaseToFarm: Math.round(s.fd),
+    distToNearestBase: Number.isFinite(s.baseDist) ? Math.round(s.baseDist) : null,
+    score: Math.round(s.score),
+  }));
 }
 
 module.exports = { findSpots };

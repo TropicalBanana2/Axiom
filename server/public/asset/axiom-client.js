@@ -965,9 +965,9 @@
       el("span", { style: "font:600 12px var(--font)" }, `Spot ${i + 1}`),
       isApplied ? el("span", { style: "font:9px var(--font-mono);color:var(--success);border:1px solid rgba(134,239,172,0.5);border-radius:999px;padding:1px 7px" }, "✓ selected") : el("span", {}),
       el("span", { style: "font:10px var(--font-mono);color:var(--text-dim);margin-left:auto" },
-        `gap ${c.farm.gap} · open ${c.base.clearance}u · ${c.distToNearestBase == null ? "no" : c.distToNearestBase + "u"} base`)));
+        `open ${c.base.clearance}u · gap ${c.farm.gap} · farm ${c.distBaseToFarm}u · ${c.distToNearestBase == null ? "no" : c.distToNearestBase + "u"} enemy`)));
     row.appendChild(el("div", { style: "font:10px var(--font-mono);color:var(--text-mute);margin-bottom:6px" },
-      `farm @ ${c.farm.mid.x},${c.farm.mid.y} · base @ ${c.base.x},${c.base.y}`));
+      `base @ ${c.base.x},${c.base.y} · farm @ ${c.farm.mid.x},${c.farm.mid.y}`));
 
     // Action 1: send the party to farm this pair (reuses Smart Farm apply).
     const farmBtn = el("button", { class: `ax-btn ${isApplied ? "" : "primary"}`, style: "font-size:11px" },
