@@ -901,6 +901,109 @@
     });
     toast(`Applied "${preset.name}" to ${ids.length} bot${ids.length === 1 ? "" : "s"}.`);
   }
+  // ----- Spot Finder card -----
+  // Finds ideal farm-pair + open-area base spots from the server's atlas.
+  // Only works where the server's spots are exposed (a non-empty atlas).
+  const TOWERS_BS = ["Wall", "Door", "SlowTrap", "ArrowTower", "CannonTower",
+    "MeleeTower", "BombTower", "MagicTower", "GoldMine", "Harvester"];
+  function savedBases() {
+    try { return JSON.parse(localStorage.getItem("axiom.baseSaver.data") || "{}"); } catch { return {}; }
+  }
+  function buildSpotFinderCard(serverId, partyId) {
+    const card = el("div", { class: "ax-card" },
+      el("div", { class: "ax-card-title" }, "spot finder"),
+      el("div", { class: "ax-card-hint" },
+        "Finds a tight tree+stone farm pair next to a large open area, away from enemy bases — then sends the party there and (optionally) builds a saved base in the open spot. Only servers with exposed resource spots."));
+    const out = el("div", {});
+    const findBtn = el("button", { class: "ax-btn primary", style: "margin-bottom:8px" }, "🔍 Find ideal spots");
+    findBtn.onclick = async () => {
+      out.innerHTML = ""; out.appendChild(el("div", { style: "color:var(--text-mute);font-size:12px;padding:6px 0" }, "Scanning the atlas…"));
+      let data;
+      try { data = await (await fetch("/api/spotfinder/" + serverId)).json(); }
+      catch { out.innerHTML = ""; out.appendChild(el("div", { style: "color:var(--danger);font-size:12px" }, "Spot finder request failed.")); return; }
+      out.innerHTML = "";
+      if (!data.exposed) {
+        out.appendChild(el("div", { style: "color:var(--text-dim);font-size:11px;line-height:1.5;padding:4px 0" }, data.note || "This server's spots aren't exposed yet."));
+        return;
+      }
+      if (!data.candidates.length) {
+        out.appendChild(el("div", { style: "color:var(--text-dim);font-size:11px;padding:4px 0" },
+          `Atlas has ${data.count} spots but no tree+stone pair with a clear base area was found.`));
+        return;
+      }
+      out.appendChild(el("div", { style: "font:9px var(--font);color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px" },
+        `${data.candidates.length} spots · ${data.count} resources · ${data.bases} enemy bases`));
+      data.candidates.forEach((c, i) => out.appendChild(spotRow(c, i, serverId, partyId)));
+    };
+    card.appendChild(findBtn);
+    card.appendChild(out);
+    return card;
+  }
+
+  function spotRow(c, i, serverId, partyId) {
+    const row = el("div", { style: "padding:8px 10px;border:1px solid var(--glass-border);border-radius:10px;background:rgba(255,255,255,0.02);margin-bottom:8px" });
+    row.appendChild(el("div", { style: "display:flex;align-items:baseline;gap:8px;margin-bottom:4px" },
+      el("span", { style: "font:600 12px var(--font)" }, `Spot ${i + 1}`),
+      el("span", { style: "font:10px var(--font-mono);color:var(--text-dim)" },
+        `farm gap ${c.farm.gap} · open ${c.base.clearance}u · ${c.distToNearestBase == null ? "no" : c.distToNearestBase + "u to"} enemy base`)));
+    row.appendChild(el("div", { style: "font:10px var(--font-mono);color:var(--text-mute);margin-bottom:6px" },
+      `farm @ ${c.farm.mid.x},${c.farm.mid.y} · base @ ${c.base.x},${c.base.y}`));
+
+    // Action 1: send the party to farm this pair (reuses Smart Farm apply).
+    const farmBtn = el("button", { class: "ax-btn", style: "font-size:11px" }, "Send party to farm");
+    farmBtn.onclick = () => applyFarmPreset({ name: `Spot ${i + 1}`, targets: [c.farm.tree, c.farm.stone] });
+
+    // Action 2: build a saved base in the open area.
+    const bases = savedBases();
+    const ids = Object.keys(bases);
+    const sel = el("select", { class: "ax-input", style: "max-width:150px;font-size:11px" });
+    if (!ids.length) sel.appendChild(el("option", { value: "" }, "(no saved bases)"));
+    for (const id of ids) sel.appendChild(el("option", { value: id }, bases[id].name));
+    const buildBtn = el("button", { class: "ax-btn", style: "font-size:11px", disabled: !ids.length ? "disabled" : null },
+      "Build base in open area");
+    buildBtn.onclick = () => buildBaseAtOpenArea(c, sel.value, partyId);
+
+    row.appendChild(el("div", { class: "ax-actions", style: "margin-top:2px" }, farmBtn));
+    row.appendChild(el("div", { style: "display:flex;gap:6px;align-items:center;margin-top:6px" }, sel, buildBtn));
+    return row;
+  }
+
+  // Dispatch the nearest party bot to the open area, wait until it arrives
+  // (watching the live fleet), then place a GoldStash at the centre and the
+  // saved base relative to it. Buildings within build range of the centre
+  // land; for a very large base, finish with the in-game continuous builder.
+  function buildBaseAtOpenArea(c, baseId, partyId) {
+    const base = savedBases()[baseId];
+    if (!base) { toast("Pick a saved base first.", "danger"); return; }
+    const fleet = fleetForOpenParty();
+    if (!fleet.length) { toast("No party bots to send.", "danger"); return; }
+    const center = { x: c.base.x, y: c.base.y };
+    const bot = fleet.slice().sort((a, b) =>
+      Math.hypot(a.pos.x - center.x, a.pos.y - center.y) - Math.hypot(b.pos.x - center.x, b.pos.y - center.y))[0];
+    send({ op: "gotoPoint", sid: bot.id, args: { x: center.x, y: center.y } });
+    toast(`Sending ${bot.label || "#" + bot.id} to the open area…`);
+    const t0 = Date.now();
+    const timer = setInterval(() => {
+      const f = fleetForOpenParty().find((x) => x.id === bot.id);
+      const arrived = f && Math.hypot(f.pos.x - center.x, f.pos.y - center.y) < 130;
+      if (arrived) {
+        clearInterval(timer);
+        send({ op: "rpc", sid: bot.id, args: { name: "MakeBuilding", type: "GoldStash", x: center.x, y: center.y, yaw: 0 } });
+        let n = 0;
+        for (const part of base.baseString.split(";")) {
+          const p = part.split(","); if (!p[0]) continue;
+          const type = TOWERS_BS[+p[0]]; if (!type) continue;
+          send({ op: "rpc", sid: bot.id, args: { name: "MakeBuilding", type, x: center.x - +p[1], y: center.y - +p[2], yaw: +p[3] || 0 } });
+          n++;
+        }
+        toast(`Placing GoldStash + ${n} buildings at the open area.`);
+      } else if (Date.now() - t0 > 60000) {
+        clearInterval(timer);
+        toast("Bot didn't reach the open area in time — try again or walk it there.", "danger");
+      }
+    }, 1000);
+  }
+
   function buildFarmPresetsCard(serverId) {
     const card = el("div", { class: "ax-card" },
       el("div", { class: "ax-card-title" }, "farm presets"),
@@ -1045,6 +1148,9 @@
       el("div", { id: "party-su-status", style: "margin-top:10px;padding-top:10px;border-top:1px solid var(--glass-divider,var(--border))" })
     ));
     updatePartyStatus();
+
+    // Spot finder (only servers with exposed spots)
+    main.appendChild(buildSpotFinderCard(serverId, partyId));
 
     // Farm presets (per server)
     main.appendChild(buildFarmPresetsCard(serverId));
