@@ -186,6 +186,40 @@ app.get("/api/spots/:serverId", (req, res) => {
   res.json({ serverId, count: Object.keys(spots).length, spots });
 });
 
+// ----- ideal farm + base spot finder ----------------------------------
+// Ranks the best places to set up — a tight tree+stone farm pair beside a
+// large open area, far from enemy bases. Only works where the server's
+// spots are EXPOSED (a non-empty atlas); otherwise returns exposed:false.
+const { findSpots } = require("./spotFinder");
+const SCANNER_STASHES = "http://95.111.234.133/api/stashes?serverId=";
+const stashCache = new Map();   // serverId -> { t, bases }
+async function enemyBases(serverId) {
+  const c = stashCache.get(serverId);
+  if (c && Date.now() - c.t < 60000) return c.bases;
+  try {
+    const r = await fetch(SCANNER_STASHES + encodeURIComponent(serverId), { signal: AbortSignal.timeout(6000) });
+    const d = await r.json();
+    const bases = (Array.isArray(d) ? d : [])
+      .map((b) => b.position).filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.y));
+    stashCache.set(serverId, { t: Date.now(), bases });
+    return bases;
+  } catch { return (c && c.bases) || []; }
+}
+app.get("/api/spotfinder/:serverId", async (req, res) => {
+  const serverId = String(req.params.serverId || "");
+  if (!/^v\d{1,6}$/.test(serverId)) return res.status(400).json({ error: "bad server" });
+  res.set("Cache-Control", "no-store");
+  const spots = Object.values(getAtlas(serverId));
+  if (spots.length === 0) {
+    return res.json({
+      exposed: false, count: 0, candidates: [],
+      note: "No resource spots known for this server yet. Farm here with World Resources on (or import a dataset) so the atlas fills in.",
+    });
+  }
+  const bases = await enemyBases(serverId);
+  res.json({ exposed: true, count: spots.length, bases: bases.length, candidates: findSpots(spots, bases) });
+});
+
 // ----- asset manifest (for the modded client preloader) ---------------
 const picturesRoot = path.join(__dirname, "..", "public", "asset", "pictures");
 function walkAssets(dir = picturesRoot) {
