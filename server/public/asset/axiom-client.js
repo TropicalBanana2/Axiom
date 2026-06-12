@@ -301,6 +301,7 @@
   // selection (or deselecting) tells the server to stop streaming the
   // previous one — keeps WS chatter bounded as the user clicks around.
   function selectSession(sid) {
+    state.view = null;                              // leave the builder
     state.selectedParty = null;                     // leave any party view
     if (state.selectedSid === sid) { renderMain(); return; }
     if (state.selectedSid != null && state.ws && state.ws.readyState === 1) {
@@ -320,6 +321,7 @@
     if (state.selectedSid != null && state.ws && state.ws.readyState === 1) {
       state.ws.send(JSON.stringify({ op: "unobserve", sid: state.selectedSid }));
     }
+    state.view = null;                              // leave the builder
     state.selectedSid = null;
     state.selectedParty = { serverId, partyId };
     // Ask for a fresh status snapshot.
@@ -327,6 +329,19 @@
     renderSessions();
     renderMain();
   }
+
+  // Open the Panel Builder view (drag-and-drop tab/feature organiser).
+  function openBuilder() {
+    if (state.selectedSid != null && state.ws && state.ws.readyState === 1) {
+      state.ws.send(JSON.stringify({ op: "unobserve", sid: state.selectedSid }));
+    }
+    state.selectedSid = null;
+    state.selectedParty = null;
+    state.view = "builder";
+    renderSessions();
+    renderMain();
+  }
+  window.axiomOpenBuilder = openBuilder;
 
   // ----- Farm Observer panel -----
   // Renders the bot's Smart Farm / navigation state into the session-detail
@@ -1155,13 +1170,231 @@
     root.innerHTML = html;
   }
 
+  // ----- Panel Builder (drag-and-drop tab/feature organiser) -----
+  // Edits the in-game panel LAYOUT: which features live in which tabs and
+  // their order. Features are unique — placing one moves it from wherever
+  // it was, so the panel never gets duplicate control ids. Every change
+  // auto-saves (debounced PUT /api/panel/layout); the in-game panel polls
+  // the revision and re-renders on the fly.
+  const B = { lib: null, layout: null, sel: null, q: "", drag: null, status: "", saveT: null };
+
+  function builderTypeBadge(t) {
+    const map = { toggle: "⏻", button: "▶", slider: "▭", number: "#", input: "✎",
+                  select: "▾", color: "◧", keybind: "⌨", group: "▣", row: "▤", text: "¶" };
+    return map[t] || "•";
+  }
+  function builderFindFeature(fid) {
+    const L = B.layout;
+    for (let ti = 0; ti < L.tabs.length; ti++)
+      for (let si = 0; si < L.tabs[ti].sections.length; si++) {
+        const idx = L.tabs[ti].sections[si].featureIds.indexOf(fid);
+        if (idx >= 0) return { ti, si, idx };
+      }
+    return null;
+  }
+  function builderScheduleSave() {
+    B.status = "saving…";
+    const statusEl = document.getElementById("builder-status");
+    if (statusEl) statusEl.textContent = B.status;
+    clearTimeout(B.saveT);
+    B.saveT = setTimeout(async () => {
+      try {
+        await api("/api/panel/layout", { method: "PUT", body: JSON.stringify(B.layout) });
+        B.status = "saved ✓";
+      } catch { B.status = "save failed"; }
+      const e = document.getElementById("builder-status");
+      if (e) e.textContent = B.status;
+    }, 500);
+  }
+  function builderMutate(fn) { fn(); builderScheduleSave(); renderBuilder($("#main")); }
+
+  // Place a feature into (tab ti, section si) at `at` (end if undefined),
+  // removing it from its current home first so each feature stays unique.
+  function builderPlace(fid, ti, si, at) {
+    const cur = builderFindFeature(fid);
+    if (cur) {
+      B.layout.tabs[cur.ti].sections[cur.si].featureIds.splice(cur.idx, 1);
+      if (cur.ti === ti && cur.si === si && at != null && cur.idx < at) at--;
+    }
+    const arr = B.layout.tabs[ti].sections[si].featureIds;
+    if (at == null || at > arr.length) at = arr.length;
+    arr.splice(at, 0, fid);
+  }
+
+  async function renderBuilder(main) {
+    main.innerHTML = "";
+    // Lazy-load library + layout once.
+    if (!B.lib || !B.layout) {
+      main.appendChild(el("div", { style: "color:var(--text-mute);padding:40px;text-align:center" }, "Loading panel builder…"));
+      try {
+        const [libR, layR] = await Promise.all([
+          fetch("/api/panel/library").then((r) => r.json()),
+          fetch("/api/panel/layout").then((r) => r.json()),
+        ]);
+        B.lib = libR.features || [];
+        B.layout = layR && layR.tabs ? layR : { tabs: [] };
+        if (!B.sel && B.layout.tabs[0]) B.sel = { ti: 0, si: 0 };
+      } catch {
+        main.innerHTML = "";
+        main.appendChild(el("div", { style: "color:var(--danger);padding:40px;text-align:center" }, "Failed to load the panel builder."));
+        return;
+      }
+      return renderBuilder(main);
+    }
+
+    const L = B.layout;
+    const placed = new Set();
+    L.tabs.forEach((t) => t.sections.forEach((s) => s.featureIds.forEach((f) => placed.add(f))));
+
+    // ── Header ──
+    main.appendChild(el("div", { style: "display:flex;align-items:center;gap:12px;margin-bottom:16px" },
+      el("div", {},
+        el("h1", { style: "font-size:20px;font-weight:600" }, "Panel Builder"),
+        el("div", { style: "color:var(--text-dim);font:11px var(--font);margin-top:2px" },
+          "Drag features into tabs to build your in-game panel. Changes apply on the fly.")),
+      el("div", { style: "margin-left:auto;display:flex;align-items:center;gap:10px" },
+        el("span", { id: "builder-status", style: "font:11px var(--font-mono);color:var(--text-mute)" }, B.status || ""),
+        el("button", { class: "ax-btn ghost", title: "Restore the default layout",
+          onclick: async () => {
+            if (!confirm("Reset the panel to the default layout?")) return;
+            try { const r = await api("/api/panel/layout/reset", { method: "POST" }); B.layout = r.layout; B.sel = { ti: 0, si: 0 }; renderBuilder($("#main")); } catch {}
+          } }, "Reset to default"))
+    ));
+
+    // ── Two-pane: library (left) + tabs (right) ──
+    const wrap = el("div", { style: "display:grid;grid-template-columns:300px 1fr;gap:16px;align-items:start" });
+
+    // ----- Library -----
+    const libCard = el("div", { class: "ax-card", style: "position:sticky;top:8px" },
+      el("div", { class: "ax-card-title" }, `feature library · ${B.lib.length}`),
+      el("div", { class: "ax-card-hint" }, "Drag onto a section, or click to add to the selected section. Placed features are dimmed."));
+    const search = el("input", { class: "ax-input", placeholder: "search features…", value: B.q, style: "margin-bottom:8px" });
+    search.oninput = () => { B.q = search.value.toLowerCase(); paintLib(); };
+    libCard.appendChild(search);
+    const libList = el("div", { style: "max-height:62vh;overflow-y:auto;overscroll-behavior:contain;display:flex;flex-direction:column;gap:4px" });
+    libCard.appendChild(libList);
+    function paintLib() {
+      libList.innerHTML = "";
+      const groups = {};
+      for (const f of B.lib) {
+        if (B.q && !(`${f.label} ${f.origin} ${f.type}`.toLowerCase().includes(B.q))) continue;
+        (groups[f.origin] = groups[f.origin] || []).push(f);
+      }
+      for (const origin of Object.keys(groups)) {
+        libList.appendChild(el("div", { style: "font:9px var(--font);color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin:6px 0 2px" }, origin));
+        for (const f of groups[origin]) {
+          const isPlaced = placed.has(f.id);
+          const chip = el("div", {
+            class: "ax-builder-chip",
+            title: f.tooltip || f.label,
+            style: `display:flex;align-items:center;gap:8px;padding:6px 9px;border:1px solid var(--glass-border);border-radius:8px;cursor:grab;font:12px var(--font);${isPlaced ? "opacity:.45;" : ""}background:rgba(255,255,255,0.03)`,
+          },
+            el("span", { style: "color:var(--text-dim);font:11px var(--font-mono);width:14px;text-align:center" }, builderTypeBadge(f.type)),
+            el("span", { style: "flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" }, f.label + (f.childCount ? ` (${f.childCount})` : "")),
+            isPlaced ? el("span", { style: "font:9px var(--font-mono);color:var(--success)" }, "✓") : el("span", {}));
+          chip.draggable = true;
+          chip.ondragstart = () => { B.drag = { fid: f.id, from: "lib" }; };
+          chip.ondragend = () => { B.drag = null; };
+          chip.onclick = () => {
+            if (!B.sel) return toast("Select a section first.", "danger");
+            builderMutate(() => builderPlace(f.id, B.sel.ti, B.sel.si));
+          };
+          libList.appendChild(chip);
+        }
+      }
+      if (!libList.children.length) libList.appendChild(el("div", { style: "color:var(--text-dim);font-size:11px;padding:8px" }, "no matches"));
+    }
+    paintLib();
+    wrap.appendChild(libCard);
+
+    // ----- Tabs + sections -----
+    const right = el("div", {});
+
+    // Tab strip
+    const tabStrip = el("div", { style: "display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;align-items:center" });
+    L.tabs.forEach((t, ti) => {
+      const active = B.sel && B.sel.ti === ti;
+      const b = el("button", { class: `ax-btn ${active ? "primary" : ""}`, style: "padding:6px 12px",
+        onclick: () => { B.sel = { ti, si: 0 }; renderBuilder($("#main")); },
+        ondblclick: () => {
+          const nv = prompt("Tab name:", t.name); if (nv && nv.trim()) builderMutate(() => { t.name = nv.trim(); });
+        },
+        title: "Click to open · double-click to rename" }, t.name);
+      // Tab is a drop target too (drops into its first section).
+      b.ondragover = (e) => { e.preventDefault(); };
+      b.ondrop = (e) => { e.preventDefault(); if (B.drag && t.sections[0]) builderMutate(() => builderPlace(B.drag.fid, ti, 0)); };
+      tabStrip.appendChild(b);
+    });
+    tabStrip.appendChild(el("button", { class: "ax-icon-btn", title: "Add tab",
+      onclick: () => { const nm = prompt("New tab name:", "New Tab"); if (nm && nm.trim()) builderMutate(() => { const id = "tab" + Date.now().toString(36); L.tabs.push({ id, name: nm.trim(), sections: [{ id: id + "-s0", name: "Section", featureIds: [] }] }); B.sel = { ti: L.tabs.length - 1, si: 0 }; }); } }, "+"));
+    right.appendChild(tabStrip);
+
+    // Active tab → sections
+    if (B.sel && L.tabs[B.sel.ti]) {
+      const tab = L.tabs[B.sel.ti];
+      const tabHead = el("div", { style: "display:flex;align-items:center;gap:8px;margin-bottom:10px" },
+        el("span", { style: "font:600 14px var(--font)" }, tab.name),
+        el("button", { class: "ax-btn ghost", style: "padding:4px 10px;font-size:11px",
+          onclick: () => { const nm = prompt("Add section:", "Section"); if (nm && nm.trim()) builderMutate(() => tab.sections.push({ id: tab.id + "-s" + Date.now().toString(36), name: nm.trim(), featureIds: [] })); } }, "+ section"),
+        L.tabs.length > 1 ? el("button", { class: "ax-btn danger", style: "padding:4px 10px;font-size:11px;margin-left:auto",
+          onclick: () => { if (confirm(`Delete tab "${tab.name}"? Its features return to the library.`)) builderMutate(() => { L.tabs.splice(B.sel.ti, 1); B.sel = { ti: 0, si: 0 }; }); } }, "delete tab") : el("span", { style: "margin-left:auto" }));
+      right.appendChild(tabHead);
+
+      tab.sections.forEach((sec, si) => {
+        const selectedSec = B.sel.si === si;
+        const secCard = el("div", { class: "ax-card", style: `padding:12px 14px;margin-bottom:10px;${selectedSec ? "border-color:var(--glass-border-h)" : ""}`,
+          onclick: () => { if (B.sel.si !== si) { B.sel = { ti: B.sel.ti, si }; renderBuilder($("#main")); } } });
+        const secHead = el("div", { style: "display:flex;align-items:center;gap:8px;margin-bottom:8px" },
+          el("span", { style: "font:600 11px var(--font-mono);color:var(--text-mute)" }, sec.name),
+          el("span", { style: "font:10px var(--font-mono);color:var(--text-dim)" }, `${sec.featureIds.length}`),
+          el("span", { style: "margin-left:auto;display:flex;gap:4px" },
+            el("button", { class: "ax-icon-btn", title: "Rename section", style: "width:22px;height:22px;font-size:10px",
+              onclick: (e) => { e.stopPropagation(); const nv = prompt("Section name:", sec.name); if (nv && nv.trim()) builderMutate(() => { sec.name = nv.trim(); }); } }, "✎"),
+            tab.sections.length > 1 ? el("button", { class: "ax-icon-btn", title: "Delete section", style: "width:22px;height:22px;font-size:11px",
+              onclick: (e) => { e.stopPropagation(); if (confirm(`Delete section "${sec.name}"?`)) builderMutate(() => { tab.sections.splice(si, 1); B.sel = { ti: B.sel.ti, si: 0 }; }); } }, "✕") : el("span", {})));
+        secCard.appendChild(secHead);
+
+        // Drop zone listing the section's features.
+        const zone = el("div", { style: "display:flex;flex-direction:column;gap:4px;min-height:34px;border:1px dashed var(--glass-divider);border-radius:8px;padding:6px" });
+        zone.ondragover = (e) => { e.preventDefault(); zone.style.borderColor = "var(--accent-mute)"; };
+        zone.ondragleave = () => { zone.style.borderColor = "var(--glass-divider)"; };
+        zone.ondrop = (e) => { e.preventDefault(); zone.style.borderColor = "var(--glass-divider)"; if (B.drag) builderMutate(() => builderPlace(B.drag.fid, B.sel.ti, si)); };
+
+        sec.featureIds.forEach((fid, idx) => {
+          const f = B.lib.find((x) => x.id === fid);
+          const row = el("div", {
+            style: "display:flex;align-items:center;gap:8px;padding:6px 9px;border:1px solid var(--glass-border);border-radius:8px;background:rgba(255,255,255,0.03);cursor:grab;font:12px var(--font)",
+          },
+            el("span", { style: "color:var(--text-dim);font:11px var(--font-mono);width:14px;text-align:center" }, builderTypeBadge(f ? f.type : "")),
+            el("span", { style: "flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" }, f ? f.label : fid),
+            el("button", { class: "ax-icon-btn", title: "Remove from this tab", style: "width:20px;height:20px;font-size:11px",
+              onclick: (e) => { e.stopPropagation(); builderMutate(() => sec.featureIds.splice(idx, 1)); } }, "✕"));
+          row.draggable = true;
+          row.ondragstart = (e) => { e.stopPropagation(); B.drag = { fid, from: { ti: B.sel.ti, si, idx } }; };
+          row.ondragend = () => { B.drag = null; };
+          // Drop on a row → insert before it (reorder / cross-section move).
+          row.ondragover = (e) => { e.preventDefault(); e.stopPropagation(); };
+          row.ondrop = (e) => { e.preventDefault(); e.stopPropagation(); if (B.drag) builderMutate(() => builderPlace(B.drag.fid, B.sel.ti, si, idx)); };
+          zone.appendChild(row);
+        });
+        if (!sec.featureIds.length) zone.appendChild(el("div", { style: "color:var(--text-dim);font-size:11px;text-align:center;padding:4px" }, "drop features here"));
+        secCard.appendChild(zone);
+        right.appendChild(secCard);
+      });
+    }
+
+    wrap.appendChild(right);
+    main.appendChild(wrap);
+  }
+
   // ----- main pane -----
   function renderMain() {
     const main = $("#main");
     // Stagger-animate the cards ONLY when the view changes (a different
     // session/party/overview was selected) — live data refreshes re-render
     // the same view every second and must not replay the entrance.
-    const viewKey = state.selectedParty
+    const viewKey = state.view === "builder" ? "builder"
+      : state.selectedParty
       ? `p:${state.selectedParty.serverId}:${state.selectedParty.partyId}`
       : state.selectedSid !== null ? `s:${state.selectedSid}` : "overview";
     if (state._lastViewKey !== viewKey) {
@@ -1171,6 +1404,7 @@
       state._viewEnterT = setTimeout(() => main.classList.remove("ax-view-enter"), 650);
     }
     main.innerHTML = "";
+    if (state.view === "builder") { renderBuilder(main); return; }
     if (state.selectedParty) { renderPartyView(main); return; }
     if (state.selectedSid === null) {
       // overview

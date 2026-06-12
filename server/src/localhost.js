@@ -62,27 +62,57 @@ app.get("/api/auth/local", (_req, res) => {
   });
 });
 
-// ----- schema (Axiom UI tree) ------------------------------------------
-const { defaultSchema } = require("./defaultSchema");
-// Auto-migrate: if the schema baked into the JS bundle has a higher
-// schemaVersion than what's in the DB, reseed. This lets us ship
-// updated default scripts (e.g. fixed chatspam channel) without
-// asking users to manually wipe their install.
-const _stored = schemaGet("schema");
-const _bundled = defaultSchema();
-let seededSchema;
-if (!_stored || (_bundled.schemaVersion || 0) > (_stored.schemaVersion || 0)) {
-  console.log(`[schema] reseeding to v${_bundled.schemaVersion} (was v${_stored?.schemaVersion || "none"})`);
-  schemaSet("schema", _bundled);
-  seededSchema = _bundled;
-} else {
-  seededSchema = _stored;
+// ----- panel schema + editable layout ---------------------------------
+// The served panel schema is assembled from two layers (see
+// schemaBuilder.js): the code-shipped feature LIBRARY + SCRIPTS, and a
+// user-editable LAYOUT (tabs/sections/feature order) stored in the DB.
+// New scripts ship via code; the user's arrangement survives updates.
+const { assemble, libraryView, defaultLayout, sanitizeLayout } = require("./schemaBuilder");
+const LAYOUT_KEY = "panelLayout";
+// Bumped on every layout change so the in-game panel can cheaply poll for
+// "something changed, re-fetch" — that's the "changeable on the fly" path.
+let panelRev = Date.now();
+
+function currentLayout() {
+  try { return schemaGet(LAYOUT_KEY) || defaultLayout(); } catch { return defaultLayout(); }
 }
 
-// Schema is readable without auth (the modded client needs it before
-// the user logs in). Write requires auth.
+// Served panel schema (library + layout). Public read — the modded client
+// fetches it before login.
 app.get("/api/schema", (_req, res) => {
-  res.json(schemaGet("schema") || seededSchema);
+  res.set("Cache-Control", "no-store");
+  res.json(assemble(currentLayout()));
+});
+// Lightweight revision probe for live updates.
+app.get("/api/panel/rev", (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json({ rev: panelRev });
+});
+// The full feature library (every draggable feature) for the Builder.
+app.get("/api/panel/library", (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json({ features: libraryView() });
+});
+// The current editable layout.
+app.get("/api/panel/layout", (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json(currentLayout());
+});
+// Save a layout (auth). Sanitised before storing; bumps the revision so
+// open panels pick it up on their next poll.
+app.put("/api/panel/layout", authMiddleware, (req, res) => {
+  const clean = sanitizeLayout(req.body);
+  if (!clean) return res.status(400).json({ error: "invalid layout" });
+  schemaSet(LAYOUT_KEY, clean);
+  panelRev = Date.now();
+  res.json({ ok: true, rev: panelRev, layout: clean });
+});
+// Reset to the code default layout (auth).
+app.post("/api/panel/layout/reset", authMiddleware, (_req, res) => {
+  const fresh = defaultLayout();
+  schemaSet(LAYOUT_KEY, fresh);
+  panelRev = Date.now();
+  res.json({ ok: true, rev: panelRev, layout: fresh });
 });
 
 // ----- per-user persisted data -----------------------------------------

@@ -202,6 +202,19 @@
         `${this.schema.tabs.length} tabs · ${Object.keys(this.schema.scripts || {}).length} scripts`;
     }
 
+    // Swap in a freshly-fetched schema and re-render in place (used by the
+    // live layout-update poll). Keeps the active tab if it still exists,
+    // re-seeds any newly-present control values, and preserves the search.
+    applySchema(schema) {
+      if (!schema || !Array.isArray(schema.tabs)) return;
+      this.schema = schema;
+      if (!schema.tabs.some((t) => t.id === this.activeTab)) {
+        this.activeTab = schema.meta.landingTabId || (schema.tabs[0] && schema.tabs[0].id);
+      }
+      this.seedValues();
+      this.render();
+    }
+
     renderTabs() {
       const tabsEl = this.root.querySelector("#axp-tabs");
       tabsEl.innerHTML = "";
@@ -845,5 +858,26 @@
     startFleetOverlay();
     autoApplyToggles(panel);
     log("ready — hotkey:", schema.meta.hotkey || "`", "+ Settings gear");
+
+    // ── Live "on the fly" layout updates ──
+    // The Panel Builder (dashboard) bumps /api/panel/rev whenever the tab
+    // layout changes. Poll it cheaply and rebuild the panel's tabs in
+    // place when it moves — no game reload. Running scripts/hooks and
+    // control values are untouched (values persist in localStorage); only
+    // the tab/section arrangement is re-rendered.
+    let lastRev = null;
+    setInterval(async () => {
+      try {
+        const r = await fetch("/api/panel/rev");
+        if (!r.ok) return;
+        const { rev } = await r.json();
+        if (lastRev === null) { lastRev = rev; return; }
+        if (rev !== lastRev) {
+          lastRev = rev;
+          const fresh = await loadSchema();
+          if (fresh) panel.applySchema(fresh);
+        }
+      } catch {}
+    }, 4000);
   });
 })();
