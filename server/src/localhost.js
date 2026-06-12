@@ -67,7 +67,7 @@ app.get("/api/auth/local", (_req, res) => {
 // schemaBuilder.js): the code-shipped feature LIBRARY + SCRIPTS, and a
 // user-editable LAYOUT (tabs/sections/feature order) stored in the DB.
 // New scripts ship via code; the user's arrangement survives updates.
-const { assemble, libraryView, defaultLayout, sanitizeLayout } = require("./schemaBuilder");
+const { assemble, libraryView, defaultLayout, sanitizeLayout, controllers } = require("./schemaBuilder");
 const LAYOUT_KEY = "panelLayout";
 // Bumped on every layout change so the in-game panel can cheaply poll for
 // "something changed, re-fetch" — that's the "changeable on the fly" path.
@@ -88,10 +88,11 @@ app.get("/api/panel/rev", (_req, res) => {
   res.set("Cache-Control", "no-store");
   res.json({ rev: panelRev });
 });
-// The full feature library (every draggable feature) for the Builder.
+// The full feature library (every draggable feature) + the multi-session
+// controllers catalogue, for the Builder.
 app.get("/api/panel/library", (_req, res) => {
   res.set("Cache-Control", "no-store");
-  res.json({ features: libraryView() });
+  res.json({ features: libraryView(), controllers: controllers() });
 });
 // The current editable layout.
 app.get("/api/panel/layout", (_req, res) => {

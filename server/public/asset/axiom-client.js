@@ -1176,7 +1176,7 @@
   // it was, so the panel never gets duplicate control ids. Every change
   // auto-saves (debounced PUT /api/panel/layout); the in-game panel polls
   // the revision and re-renders on the fly.
-  const B = { lib: null, layout: null, sel: null, q: "", drag: null, status: "", saveT: null };
+  const B = { lib: null, controllers: null, layout: null, sel: null, q: "", drag: null, status: "", saveT: null };
 
   function builderTypeBadge(t) {
     const map = { toggle: "⏻", button: "▶", slider: "▭", number: "#", input: "✎",
@@ -1232,6 +1232,7 @@
           fetch("/api/panel/layout").then((r) => r.json()),
         ]);
         B.lib = libR.features || [];
+        B.controllers = libR.controllers || [];
         B.layout = layR && layR.tabs ? layR : { tabs: [] };
         if (!B.sel && B.layout.tabs[0]) B.sel = { ti: 0, si: 0 };
       } catch {
@@ -1264,8 +1265,25 @@
     // ── Two-pane: library (left) + tabs (right) ──
     const wrap = el("div", { style: "display:grid;grid-template-columns:300px 1fr;gap:16px;align-items:start" });
 
+    // Left column wraps the Controllers catalogue + the feature library.
+    const left = el("div", { style: "display:flex;flex-direction:column;gap:12px;position:sticky;top:8px" });
+
+    // ----- Controllers (server-side, multi-session — informational) -----
+    const ctrlCard = el("div", { class: "ax-card" },
+      el("div", { class: "ax-card-title" }, `controllers · ${(B.controllers || []).length}`),
+      el("div", { class: "ax-card-hint" }, "Server-side, multi-session coordinators. Configured per party in the dashboard, not placed in an in-game tab."));
+    for (const c of (B.controllers || [])) {
+      ctrlCard.appendChild(el("div", { style: "padding:8px 9px;border:1px solid var(--glass-border);border-radius:8px;background:rgba(99,102,241,0.06);margin-top:4px" },
+        el("div", { style: "display:flex;align-items:center;gap:8px;margin-bottom:3px" },
+          el("span", { style: "font:600 12px var(--font)" }, c.name),
+          el("span", { style: "font:9px var(--font-mono);color:#a5b4fc;border:1px solid var(--glass-border);border-radius:999px;padding:1px 7px" }, c.scope)),
+        el("div", { style: "font:11px var(--font);color:var(--text-dim);line-height:1.45" }, c.description),
+        el("div", { style: "font:10px var(--font-mono);color:var(--text-mute);margin-top:4px" }, "⚙ " + c.configuredAt)));
+    }
+    left.appendChild(ctrlCard);
+
     // ----- Library -----
-    const libCard = el("div", { class: "ax-card", style: "position:sticky;top:8px" },
+    const libCard = el("div", { class: "ax-card" },
       el("div", { class: "ax-card-title" }, `feature library · ${B.lib.length}`),
       el("div", { class: "ax-card-hint" }, "Drag onto a section, or click to add to the selected section. Placed features are dimmed."));
     const search = el("input", { class: "ax-input", placeholder: "search features…", value: B.q, style: "margin-bottom:8px" });
@@ -1305,7 +1323,8 @@
       if (!libList.children.length) libList.appendChild(el("div", { style: "color:var(--text-dim);font-size:11px;padding:8px" }, "no matches"));
     }
     paintLib();
-    wrap.appendChild(libCard);
+    left.appendChild(libCard);
+    wrap.appendChild(left);
 
     // ----- Tabs + sections -----
     const right = el("div", {});

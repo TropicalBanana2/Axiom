@@ -149,6 +149,25 @@ function sanitizeLayout(input) {
   return { version: DEFAULT_SCHEMA.schemaVersion, landingTabId, tabs };
 }
 
+// ── Controllers ──────────────────────────────────────────────────────
+// Server-side, MULTI-SESSION coordinators — distinct from the per-session
+// in-game scripts. They run on the axiom server and are configured per
+// party in the dashboard (not dragged into an in-game tab). Catalogued
+// here so the Panel Builder can show the full capability inventory; add a
+// new entry when a new coordinator ships.
+function controllers() {
+  return [
+    {
+      id: "autoUpgrade",
+      name: "Auto Upgrade",
+      scope: "per-party",
+      configuredAt: "Party menu → Auto Upgrade",
+      description:
+        "Economy-first base upgrader. Keeps GoldStash + GoldMines a set number of tiers ahead, then towers, then walls. Spends every session's materials, designates a 'saver' to bank gold for the next stash tier, retreats idle bots to their farm spots while saving, auto-rebuilds dead buildings, manages pets and a farm-harvester ring, and buys pickaxes only when the economy can spare it.",
+    },
+  ];
+}
+
 module.exports = {
-  buildLibrary, defaultLayout, libraryView, assemble, sanitizeLayout,
+  buildLibrary, defaultLayout, libraryView, assemble, sanitizeLayout, controllers,
 };
