@@ -909,18 +909,33 @@
   function savedBases() {
     try { return JSON.parse(localStorage.getItem("axiom.baseSaver.data") || "{}"); } catch { return {}; }
   }
+  // Persisted "which spot did I apply" + "which base did I pick", so the
+  // finder reopens pre-loaded with the active spot shown as selected.
+  const spotAppliedKey = (s, p) => `axiom.spot.applied.${s}.${p}`;
+  const spotBaseKey = (p) => `axiom.spot.base.${p}`;
+  function getAppliedSpot(s, p) { try { return JSON.parse(localStorage.getItem(spotAppliedKey(s, p)) || "null"); } catch { return null; } }
+  function setAppliedSpot(s, p, mid) { try { localStorage.setItem(spotAppliedKey(s, p), JSON.stringify(mid)); } catch {} }
+
   function buildSpotFinderCard(serverId, partyId) {
     const card = el("div", { class: "ax-card" },
-      el("div", { class: "ax-card-title" }, "spot finder"),
+      el("div", { style: "display:flex;align-items:center;gap:8px;margin-bottom:4px" },
+        el("div", { class: "ax-card-title", style: "margin:0" }, "spot finder"),
+        el("button", { class: "ax-btn ghost", style: "font-size:11px;margin-left:auto;padding:4px 10px",
+          onclick: () => load() }, "↻ Rescan")),
       el("div", { class: "ax-card-hint" },
-        "Finds a tight tree+stone farm pair next to a large open area, away from enemy bases — then sends the party there and (optionally) builds a saved base in the open spot. Only servers with exposed resource spots."));
+        "A tight tree+stone farm pair next to a large open area, away from enemy bases. Send the party there, then build a saved base in the open spot. Only servers with exposed resource spots."));
     const out = el("div", {});
-    const findBtn = el("button", { class: "ax-btn primary", style: "margin-bottom:8px" }, "🔍 Find ideal spots");
-    findBtn.onclick = async () => {
-      out.innerHTML = ""; out.appendChild(el("div", { style: "color:var(--text-mute);font-size:12px;padding:6px 0" }, "Scanning the atlas…"));
+    card.appendChild(out);
+
+    async function load() {
+      out.innerHTML = "";
+      out.appendChild(el("div", { style: "color:var(--text-mute);font-size:12px;padding:6px 0" }, "Scanning the atlas…"));
       let data;
       try { data = await (await fetch("/api/spotfinder/" + serverId)).json(); }
       catch { out.innerHTML = ""; out.appendChild(el("div", { style: "color:var(--danger);font-size:12px" }, "Spot finder request failed.")); return; }
+      paint(data);
+    }
+    function paint(data) {
       out.innerHTML = "";
       if (!data.exposed) {
         out.appendChild(el("div", { style: "color:var(--text-dim);font-size:11px;line-height:1.5;padding:4px 0" }, data.note || "This server's spots aren't exposed yet."));
@@ -933,34 +948,52 @@
       }
       out.appendChild(el("div", { style: "font:9px var(--font);color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px" },
         `${data.candidates.length} spots · ${data.count} resources · ${data.bases} enemy bases`));
-      data.candidates.forEach((c, i) => out.appendChild(spotRow(c, i, serverId, partyId)));
-    };
-    card.appendChild(findBtn);
-    card.appendChild(out);
+      const applied = getAppliedSpot(serverId, partyId);
+      data.candidates.forEach((c, i) => {
+        const isApplied = applied && Math.abs(applied.x - c.farm.mid.x) < 60 && Math.abs(applied.y - c.farm.mid.y) < 60;
+        out.appendChild(spotRow(c, i, serverId, partyId, isApplied, () => paint(data)));
+      });
+    }
+
+    load();   // auto-load on open — no click needed
     return card;
   }
 
-  function spotRow(c, i, serverId, partyId) {
-    const row = el("div", { style: "padding:8px 10px;border:1px solid var(--glass-border);border-radius:10px;background:rgba(255,255,255,0.02);margin-bottom:8px" });
+  function spotRow(c, i, serverId, partyId, isApplied, rerender) {
+    const row = el("div", { style: `padding:8px 10px;border:1px solid ${isApplied ? "var(--success)" : "var(--glass-border)"};border-radius:10px;background:${isApplied ? "rgba(134,239,172,0.07)" : "rgba(255,255,255,0.02)"};margin-bottom:8px` });
     row.appendChild(el("div", { style: "display:flex;align-items:baseline;gap:8px;margin-bottom:4px" },
       el("span", { style: "font:600 12px var(--font)" }, `Spot ${i + 1}`),
-      el("span", { style: "font:10px var(--font-mono);color:var(--text-dim)" },
-        `farm gap ${c.farm.gap} · open ${c.base.clearance}u · ${c.distToNearestBase == null ? "no" : c.distToNearestBase + "u to"} enemy base`)));
+      isApplied ? el("span", { style: "font:9px var(--font-mono);color:var(--success);border:1px solid rgba(134,239,172,0.5);border-radius:999px;padding:1px 7px" }, "✓ selected") : el("span", {}),
+      el("span", { style: "font:10px var(--font-mono);color:var(--text-dim);margin-left:auto" },
+        `gap ${c.farm.gap} · open ${c.base.clearance}u · ${c.distToNearestBase == null ? "no" : c.distToNearestBase + "u"} base`)));
     row.appendChild(el("div", { style: "font:10px var(--font-mono);color:var(--text-mute);margin-bottom:6px" },
       `farm @ ${c.farm.mid.x},${c.farm.mid.y} · base @ ${c.base.x},${c.base.y}`));
 
     // Action 1: send the party to farm this pair (reuses Smart Farm apply).
-    const farmBtn = el("button", { class: "ax-btn", style: "font-size:11px" }, "Send party to farm");
-    farmBtn.onclick = () => applyFarmPreset({ name: `Spot ${i + 1}`, targets: [c.farm.tree, c.farm.stone] });
+    const farmBtn = el("button", { class: `ax-btn ${isApplied ? "" : "primary"}`, style: "font-size:11px" },
+      isApplied ? "Re-send party to farm" : "Send party to farm");
+    farmBtn.onclick = () => {
+      applyFarmPreset({ name: `Spot ${i + 1}`, targets: [c.farm.tree, c.farm.stone] });
+      setAppliedSpot(serverId, partyId, c.farm.mid);
+      rerender && rerender();
+    };
 
-    // Action 2: build a saved base in the open area.
+    // Action 2: build a saved base in the open area (remembers last pick).
     const bases = savedBases();
     const ids = Object.keys(bases);
+    const lastBase = localStorage.getItem(spotBaseKey(partyId));
     const sel = el("select", { class: "ax-input", style: "max-width:150px;font-size:11px" });
     if (!ids.length) sel.appendChild(el("option", { value: "" }, "(no saved bases)"));
-    for (const id of ids) sel.appendChild(el("option", { value: id }, bases[id].name));
-    const buildBtn = el("button", { class: "ax-btn", style: "font-size:11px", disabled: !ids.length ? "disabled" : null },
-      "Build base in open area");
+    for (const id of ids) {
+      const o = el("option", { value: id }, bases[id].name);
+      if (id === lastBase) o.selected = true;
+      sel.appendChild(o);
+    }
+    sel.onchange = () => { try { localStorage.setItem(spotBaseKey(partyId), sel.value); } catch {} };
+    const buildBtn = el("button", { class: "ax-btn", style: "font-size:11px" }, "Build base in open area");
+    // Set .disabled as a PROPERTY — el() would turn a `disabled:null` attr
+    // into the string "null", which disables the button regardless.
+    buildBtn.disabled = !ids.length;
     buildBtn.onclick = () => buildBaseAtOpenArea(c, sel.value, partyId);
 
     row.appendChild(el("div", { class: "ax-actions", style: "margin-top:2px" }, farmBtn));

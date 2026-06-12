@@ -348,6 +348,12 @@
           } else if (f.op === "fleet") {
             // Live party fleet (positions + nav) for the in-game overlay.
             window.__axiomFleet = f.data || [];
+          } else if (f.op === "control") {
+            // Authoritative control state from the server — keep the Take
+            // Control button and the input gate in sync (multi-tab safe,
+            // and correct after a last-tab detach hands control back).
+            window.__axiomControl = !!(f.data && f.data.taken);
+            if (window.__axiomRepaintControl) window.__axiomRepaintControl();
           } else if (f.op === "error") {
             document.body.insertAdjacentHTML("afterbegin",
               `<div style="position:fixed;top:8px;left:50%;transform:translateX(-50%);background:#f87171;color:#000;padding:6px 14px;border-radius:6px;font:12px var(--font);z-index:99999">attach error: ${f.data?.reason || "unknown"}</div>`);
@@ -524,6 +530,8 @@
         paint();
       };
       paint();
+      // Let the server's authoritative control echoes repaint the button.
+      window.__axiomRepaintControl = paint;
       document.body.appendChild(ctrlBtn);
       // Tell the bot to yield right away so the user is driving the moment
       // the session opens (matches __axiomControl = true above).

@@ -333,7 +333,7 @@ const handleConnection = (ws) => {
       // gone, so it resumes its tasks instead of staying frozen after the
       // tab closes. (Control now defaults ON when a session is opened.)
       const bot = bots.get(sid);
-      if (bot && (!subs || subs.size === 0)) bot._userControlling = false;
+      if (bot && (!subs || subs.size === 0)) { bot._userControlling = false; broadcastControl(sid, false); }
     }
     if (ws.observers) {
       for (const sid of ws.observers) {
@@ -345,6 +345,17 @@ const handleConnection = (ws) => {
   });
 };
 bindServer();
+
+// Push the authoritative control state to EVERY browser attached to a
+// session (not just the one that toggled it), so the Take Control button
+// is always correct — across multiple tabs, and after a last-tab detach
+// hands control back to the bot.
+function broadcastControl(sid, taken) {
+  const subs = subscribersBySid.get(sid);
+  if (!subs) return;
+  const frame = JSON.stringify({ op: "control", sid, data: { taken: !!taken } });
+  for (const ws of subs) if (ws.readyState === 1 && ws.attachReady) ws.send(frame);
+}
 
 function handleJsonFrame(ws, raw, authTimer) {
   const frame = decodeJson(raw);
@@ -429,7 +440,7 @@ function handleJsonFrame(ws, raw, authTimer) {
       ws.attached.delete(sid);
       // Resume autonomy once the last attached browser detaches.
       const bot = bots.get(sid);
-      if (bot && (!subs || subs.size === 0)) bot._userControlling = false;
+      if (bot && (!subs || subs.size === 0)) { bot._userControlling = false; broadcastControl(sid, false); }
       break;
     }
 
@@ -573,7 +584,7 @@ function handleJsonFrame(ws, raw, authTimer) {
       const bot = bots.get(frame.sid);
       if (!bot || bot._userId !== ws.userId) return;
       bot._userControlling = !!(frame.args && frame.args.taken);
-      send(ws, { op: "control", sid: bot.id, data: { taken: bot._userControlling } });
+      broadcastControl(frame.sid, bot._userControlling);
       break;
     }
 
