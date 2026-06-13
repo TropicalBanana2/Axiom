@@ -48,6 +48,10 @@ function resourceClearance(px, py, spots) {
 //   bases: [{ x, y }]     enemy stash positions to avoid
 function findSpots(spots, bases, opts = {}) {
   const returnN = opts.returnN || RETURN_N;
+  // A base only fits if the open area clears obstacles by at least its
+  // own radius — callers building a big base pass minClear so cramped
+  // sites are rejected up front.
+  const minClear = Math.max(BASE_CLEAR_MIN, opts.minClear || 0);
   spots = (spots || []).filter((s) => s && Number.isFinite(s.x) && Number.isFinite(s.y));
   bases = (bases || []).filter((b) => b && Number.isFinite(b.x) && Number.isFinite(b.y));
   if (spots.length === 0) return [];
@@ -72,7 +76,7 @@ function findSpots(spots, bases, opts = {}) {
   for (let gx = EDGE_MARGIN; gx <= MAP_SIZE - EDGE_MARGIN; gx += GRID_STEP) {
     for (let gy = EDGE_MARGIN; gy <= MAP_SIZE - EDGE_MARGIN; gy += GRID_STEP) {
       const clr = resourceClearance(gx, gy, spots);
-      if (clr < BASE_CLEAR_MIN) continue;
+      if (clr < minClear) continue;
       const baseDist = bases.length ? nearest(gx, gy, bases) : Infinity;
       if (baseDist < SAFE_BASE_DIST) continue;
       // 3) Nearest eligible farm to this site.

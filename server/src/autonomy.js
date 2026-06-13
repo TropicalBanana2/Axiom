@@ -33,6 +33,19 @@ async function enemyBases(serverId) {
 
 const dist = (a, b) => (a && b) ? Math.hypot(a.x - b.x, a.y - b.y) : Infinity;
 
+// How far the base extends from its GoldStash — the open area must clear
+// obstacles by at least this much. baseString parts are "idx,dx,dy,yaw"
+// where dx,dy is the stash→building offset; add a building half + margin.
+function baseRadius(baseString) {
+  let maxR = 0;
+  for (const part of String(baseString).split(";")) {
+    const p = part.split(","); if (!p[0]) continue;
+    const r = Math.hypot(+p[1] || 0, +p[2] || 0);
+    if (r > maxR) maxR = r;
+  }
+  return Math.round(maxR + 60);
+}
+
 function createAutonomy({ getBots, enableParty, sendToUser }) {
   const jobs = new Map();   // "userId|partyId" -> job
   const K = (u, p) => u + "|" + p;
@@ -75,6 +88,7 @@ function createAutonomy({ getBots, enableParty, sendToUser }) {
     if (!baseString) return { ok: false, error: "No base layout — pick a saved base first." };
     jobs.set(K(userId, partyId), {
       userId, partyId: +partyId, serverId: bots[0].serverId, baseString,
+      baseRadius: baseRadius(baseString),
       phase: "spot", status: "Finding the best spot…", phaseT0: Date.now(),
       spot: null, builderId: null,
     });
@@ -98,8 +112,12 @@ function createAutonomy({ getBots, enableParty, sendToUser }) {
       const spots = Object.values(getAtlas(job.serverId));
       if (!spots.length) return setPhase(job, "failed", "No resource spots known for this server.");
       const bases = await enemyBases(job.serverId);
-      const cands = findSpots(spots, bases);
-      if (!cands.length) return setPhase(job, "failed", "No suitable spot found.");
+      // Require an open area big enough for THIS base (clearance >= radius).
+      const cands = findSpots(spots, bases, { minClear: job.baseRadius });
+      if (!cands.length) {
+        return setPhase(job, "failed",
+          `No open area large enough for this base (needs ${job.baseRadius}u clear). Try a smaller base.`);
+      }
       job.spot = cands[0];
       applyFarm(bots, job.spot);
       setPhase(job, "farm", "Farming the pair to gather materials…");
@@ -116,18 +134,25 @@ function createAutonomy({ getBots, enableParty, sendToUser }) {
 
     } else if (job.phase === "build") {
       const b = bots.find((x) => x.id === job.builderId) || richest(bots);
-      if (dist(b.myPlayer.position, job.spot.base) < 140) {
+      const d = dist(b.myPlayer.position, job.spot.base);
+      if (d < 140) {
         const n = placeBase(b, job.spot.base, job.baseString);
         for (const bot of bots) { try { bot.gotoPoint(job.spot.base.x, job.spot.base.y); } catch {} }
         setPhase(job, "recall", `Base placed (${n} parts) — recalling the party…`);
-      } else if (elapsed > 70000) {
-        setPhase(job, "failed", "Builder didn't reach the base in time.");
+      } else if (elapsed > 120000) {
+        setPhase(job, "failed", "Builder couldn't reach the base — try again (clear path / daytime).");
+      } else {
+        // Keep re-issuing so the bot commits to the trip even if its farm
+        // nav or a stuck-recovery tried to pull it back.
+        try { b.gotoPoint(job.spot.base.x, job.spot.base.y); } catch {}
+        job.status = `Building — bot ${Math.round(d)}u from base…`;
       }
 
     } else if (job.phase === "recall") {
       const atBase = bots.filter((x) => dist(x.myPlayer.position, job.spot.base) < 280).length;
       job.status = `Recalling to base (${atBase}/${bots.length})…`;
-      if (atBase >= Math.max(1, Math.ceil(bots.length * 0.6)) || elapsed > 50000) {
+      for (const bot of bots) { try { bot.gotoPoint(job.spot.base.x, job.spot.base.y); } catch {} }
+      if (atBase >= Math.max(1, Math.ceil(bots.length * 0.6)) || elapsed > 60000) {
         enableParty(job.userId, job.partyId, true);
         setPhase(job, "done", "✓ Autonomous: Auto Upgrade running — farm ↔ base ↔ upgrade.");
       }

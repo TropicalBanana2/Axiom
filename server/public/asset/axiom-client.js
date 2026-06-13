@@ -944,11 +944,14 @@
         send({ op: "autonomyStop", args: { partyId: Number(partyId) } });
         return;
       }
-      const baseId = localStorage.getItem(spotBaseKey(partyId));
-      const base = baseId && savedBases()[baseId];
-      if (!base) { toast("Pick a saved base in a spot row first.", "danger"); return; }
+      // Use the last-picked base, else fall back to the first saved one,
+      // so an untouched dropdown doesn't block the click.
+      const bases = savedBases();
+      const baseId = localStorage.getItem(spotBaseKey(partyId)) || Object.keys(bases)[0];
+      const base = baseId && bases[baseId];
+      if (!base) { toast("No saved bases yet — record one with Base Saver in the in-game panel first.", "danger"); return; }
       send({ op: "autonomyStart", args: { partyId: Number(partyId), baseString: base.baseString } });
-      toast("Autonomous setup started — running on the server.");
+      toast(`Autonomous setup started with "${base.name}" — running on the server.`);
     };
     card.appendChild(autoBtn);
     card.appendChild(autoStatus);
