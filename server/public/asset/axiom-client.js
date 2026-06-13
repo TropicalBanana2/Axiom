@@ -36,6 +36,7 @@
     keys: [],
     smartUpgrade: { aheadBy: 2, farmWhenSaving: true, autoRebuild: true, whenDone: "keep", parties: [] },  // config
     smartUpgradeStatus: null,                        // live status from server
+    autonomy: { jobs: [] },                          // live autonomy job status
     pendingPartyCreate: null,                        // two-phase party spawn state
     fleet: [],                                       // live bot positions/nav
   };
@@ -159,6 +160,13 @@
           renderSmartUpgrade();
           // Live-refresh the party view if one's open.
           if (state.selectedParty) { updatePartyStatus(); updatePartyEconomy(); }
+          break;
+        case "autonomy":
+          state.autonomy = f.data || { jobs: [] };
+          if (state.selectedParty) updateAutonomyStatus();
+          break;
+        case "autonomyResult":
+          if (f.data && f.data.ok === false) toast(f.data.error || "Autonomy failed.", "danger");
           break;
         case "farmSpot":
           if (f.sid === state.selectedSid) {
@@ -926,17 +934,26 @@
         "A tight tree+stone farm pair next to a large open area, away from enemy bases. Send the party there, then build a saved base in the open spot. Only servers with exposed resource spots."));
 
     // One-click full autonomy: pick the best spot → farm → build the saved
-    // base → recall to base → enable Auto Upgrade. Runs while this tab is
-    // open; once Auto Upgrade is on, the server coordinator keeps going.
-    const autoStatus = el("div", { style: "font:11px var(--font-mono);color:var(--text-mute);min-height:14px;margin:2px 0 8px" });
-    const autoBtn = el("button", { class: "ax-btn primary", style: "width:100%;margin-bottom:4px" }, "⚡ Go Autonomous (best spot)");
+    // base → recall to base → enable Auto Upgrade. Runs ENTIRELY on the
+    // server (autonomy.js), so it keeps going even if you close this tab.
+    const autoStatus = el("div", { id: "party-autonomy-status", style: "font:11px var(--font-mono);color:var(--text-mute);min-height:14px;margin:2px 0 8px" });
+    const autoBtn = el("button", { id: "party-autonomy-btn", class: "ax-btn primary", style: "width:100%;margin-bottom:4px" }, "⚡ Go Autonomous (best spot)");
     autoBtn.onclick = () => {
-      if (state._autoFlow) { stopAutonomous(); autoBtn.textContent = "⚡ Go Autonomous (best spot)"; autoStatus.textContent = "Cancelled."; return; }
-      autoBtn.textContent = "■ Stop autonomous";
-      goAutonomous(serverId, partyId, autoStatus, () => { autoBtn.textContent = "⚡ Go Autonomous (best spot)"; });
+      const job = autonomyJobForParty(partyId);
+      if (job && job.phase !== "done" && job.phase !== "failed") {
+        send({ op: "autonomyStop", args: { partyId: Number(partyId) } });
+        return;
+      }
+      const baseId = localStorage.getItem(spotBaseKey(partyId));
+      const base = baseId && savedBases()[baseId];
+      if (!base) { toast("Pick a saved base in a spot row first.", "danger"); return; }
+      send({ op: "autonomyStart", args: { partyId: Number(partyId), baseString: base.baseString } });
+      toast("Autonomous setup started — running on the server.");
     };
     card.appendChild(autoBtn);
     card.appendChild(autoStatus);
+    send({ op: "autonomyStatus" });   // pull any in-progress job
+    setTimeout(updateAutonomyStatus, 0);
 
     const out = el("div", {});
     card.appendChild(out);
@@ -1051,92 +1068,21 @@
     }, 1000);
   }
 
-  function stopAutonomous() {
-    if (state._autoFlow) { clearInterval(state._autoFlow); state._autoFlow = null; }
-    if (state._autoFlowDone) { const cb = state._autoFlowDone; state._autoFlowDone = null; cb(); }
+  // ── Autonomy status (server-driven) ──
+  function autonomyJobForParty(partyId) {
+    const jobs = (state.autonomy && state.autonomy.jobs) || [];
+    return jobs.find((j) => String(j.partyId) === String(partyId));
   }
-
-  // ── One-click full autonomy ──
-  // Best spot → farm the pair → (warm up materials) → build the saved base
-  // → recall the whole party to the base → enable Auto Upgrade. Recall
-  // BEFORE enabling so the coordinator's captureBase anchors home at the
-  // open area, not at the farm. Runs in this tab; once Auto Upgrade is on,
-  // the server coordinator keeps the farm↔base↔upgrade loop going for good.
-  function goAutonomous(serverId, partyId, statusEl, onEnd) {
-    stopAutonomous();
-    const setS = (t) => { if (statusEl) statusEl.textContent = t; };
-    const baseId = localStorage.getItem(spotBaseKey(partyId));
-    const base = baseId && savedBases()[baseId];
-    if (!base) { toast("Pick a saved base in a spot row first.", "danger"); setS("Need a saved base — pick one below."); onEnd && onEnd(); return; }
-
-    const partyBots = () => state.sessions.filter((s) =>
-      s.serverId === serverId && String(partyIdOf(s)) === String(partyId) && s.status === "in_world");
-    const fleetBot = (id) => fleetForOpenParty().find((b) => b.id === id);
-    const distTo = (f, c) => f && f.pos ? Math.hypot(f.pos.x - c.x, f.pos.y - c.y) : Infinity;
-
-    let phase = "find", c = null, center = null, builderId = null, phaseT0 = Date.now();
-    state._autoFlowDone = onEnd || null;
-    const stop = () => stopAutonomous();
-
-    const step = async () => {
-      if (phase === "find") {
-        setS("Finding the best spot…");
-        let data;
-        try { data = await (await fetch("/api/spotfinder/" + serverId)).json(); }
-        catch { setS("Spot lookup failed."); stop(); return; }
-        if (!data.exposed || !data.candidates.length) { setS("No spot available on this server."); stop(); return; }
-        c = data.candidates[0]; center = { x: c.base.x, y: c.base.y };
-        applyFarmPreset({ name: "Auto", targets: [c.farm.tree, c.farm.stone] });
-        setAppliedSpot(serverId, partyId, c.farm.mid);
-        phase = "farm"; phaseT0 = Date.now();
-        return;
-      }
-      if (phase === "farm") {
-        const bots = partyBots();
-        if (!bots.length) { setS("Waiting for in-world bots…"); return; }
-        const rich = bots.slice().sort((a, b) => ((b.stats && b.stats.gold) || 0) - ((a.stats && a.stats.gold) || 0))[0];
-        const wood = (rich.stats && rich.stats.wood) || 0, stone = (rich.stats && rich.stats.stone) || 0;
-        const secs = Math.round((Date.now() - phaseT0) / 1000);
-        setS(`Farming — gathering materials (${fmtShort(wood)}w ${fmtShort(stone)}s) · ${secs}s`);
-        if ((wood >= 500 && stone >= 500) || Date.now() - phaseT0 > 120000) {
-          builderId = rich.id;
-          send({ op: "gotoPoint", sid: builderId, args: { x: center.x, y: center.y } });
-          phase = "build"; phaseT0 = Date.now();
-        }
-        return;
-      }
-      if (phase === "build") {
-        const f = fleetBot(builderId);
-        setS("Sending a bot to build the base…");
-        if (distTo(f, center) < 140) {
-          send({ op: "rpc", sid: builderId, args: { name: "MakeBuilding", type: "GoldStash", x: center.x, y: center.y, yaw: 0 } });
-          let n = 0;
-          for (const part of base.baseString.split(";")) {
-            const p = part.split(","); if (!p[0]) continue;
-            const type = TOWERS_BS[+p[0]]; if (!type) continue;
-            send({ op: "rpc", sid: builderId, args: { name: "MakeBuilding", type, x: center.x - +p[1], y: center.y - +p[2], yaw: +p[3] || 0 } });
-            n++;
-          }
-          for (const s of partyBots()) send({ op: "gotoPoint", sid: s.id, args: { x: center.x, y: center.y } });
-          phase = "recall"; phaseT0 = Date.now();
-          setS(`Base placed (${n} parts) — recalling the party…`);
-        } else if (Date.now() - phaseT0 > 70000) { setS("Builder didn't reach the base — stopped."); stop(); }
-        return;
-      }
-      if (phase === "recall") {
-        const bots = partyBots();
-        const atBase = bots.filter((s) => distTo(fleetBot(s.id), center) < 280).length;
-        setS(`Recalling to base (${atBase}/${bots.length})…`);
-        if (atBase >= Math.max(1, Math.ceil(bots.length * 0.6)) || Date.now() - phaseT0 > 50000) {
-          send({ op: "smartUpgradeParty", args: { partyId: Number(partyId), enabled: true } });
-          setS("✓ Autonomous: Auto Upgrade running — farm → base → upgrade.");
-          phase = "done"; stop();
-        }
-        return;
-      }
-    };
-    state._autoFlow = setInterval(step, 1500);
-    step();
+  function updateAutonomyStatus() {
+    const statusEl = document.getElementById("party-autonomy-status");
+    const btn = document.getElementById("party-autonomy-btn");
+    if (!statusEl || !state.selectedParty) return;
+    const job = autonomyJobForParty(state.selectedParty.partyId);
+    const running = job && job.phase !== "done" && job.phase !== "failed";
+    statusEl.textContent = job ? (job.status || job.phase) : "";
+    statusEl.style.color = job && job.phase === "failed" ? "var(--danger)"
+      : job && job.phase === "done" ? "var(--success)" : "var(--text-mute)";
+    if (btn) btn.textContent = running ? "■ Stop autonomous" : "⚡ Go Autonomous (best spot)";
   }
 
   function buildFarmPresetsCard(serverId) {

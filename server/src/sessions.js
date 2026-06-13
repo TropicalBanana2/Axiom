@@ -159,6 +159,16 @@ const smartUpgrade = createCoordinator({
   sendToUser: (userId, frame) => userSessionsBroadcast(userId, frame),
 });
 
+// Server-side one-click autonomy: find spot → farm → build base → recall
+// → enable Auto Upgrade. Runs entirely here so it survives the dashboard
+// tab closing. See autonomy.js.
+const { createAutonomy } = require("./autonomy");
+const autonomy = createAutonomy({
+  getBots: () => bots.values(),
+  enableParty: (userId, partyId, enabled) => smartUpgrade.setPartyEnabled(userId, partyId, enabled),
+  sendToUser: (userId, frame) => userSessionsBroadcast(userId, frame),
+});
+
 // -------- bot lifecycle -----------------------------------------------
 // All event-wiring lives in `_wireBot` so we can reuse it for both new
 // spawns and restored sessions.
@@ -497,6 +507,26 @@ function handleJsonFrame(ws, raw, authTimer) {
         data: smartUpgrade.getStatus(ws.userId),
         config: smartUpgrade.getConfig(ws.userId),
       });
+      break;
+    }
+
+    case "autonomyStart": {
+      // { op:"autonomyStart", args:{ partyId, baseString } }
+      const a = frame.args || {};
+      const res = autonomy.start(ws.userId, a.partyId, a.baseString);
+      send(ws, { op: "autonomyResult", data: res });
+      break;
+    }
+
+    case "autonomyStop": {
+      const a = frame.args || {};
+      autonomy.stop(ws.userId, a.partyId);
+      send(ws, { op: "autonomyResult", data: { ok: true, stopped: true } });
+      break;
+    }
+
+    case "autonomyStatus": {
+      send(ws, { op: "autonomy", data: { jobs: autonomy.statusFor(ws.userId) } });
       break;
     }
 
