@@ -74,8 +74,29 @@ function createAutonomy({ getBots, enableParty, sendToUser }) {
       } catch {}
     }
   }
-  function placeBase(bot, center, baseString) {
-    try { bot.sendRpc("MakeBuilding", { type: "GoldStash", x: center.x, y: center.y, yaw: 0 }); } catch {}
+  // Is there a live GoldStash near `center` in the bot's known buildings?
+  // We must confirm the stash landed before placing anything else — every
+  // other building is rejected by the server until a stash exists.
+  function stashNear(bot, center, r = 160) {
+    if (!bot.buildings) return false;
+    for (const bld of bot.buildings.values()) {
+      if (bld.type === "GoldStash" && !bld.dead &&
+          Math.hypot(bld.x - center.x, bld.y - center.y) < r) return true;
+    }
+    return false;
+  }
+  // Where the builder stands to place the base: just OUTSIDE the footprint,
+  // on the side facing the farm — so it never places on its own cell and
+  // never seals itself inside the towers.
+  function approachPoint(center, farmMid, radius) {
+    const dx = farmMid.x - center.x, dy = farmMid.y - center.y;
+    const d = Math.hypot(dx, dy) || 1;
+    const off = radius + 70;
+    return { x: Math.round(center.x + (dx / d) * off), y: Math.round(center.y + (dy / d) * off) };
+  }
+  // Place every base building (NOT the stash — that's placed + confirmed
+  // first). Positions are relative to the stash centre.
+  function placeBuildings(bot, center, baseString) {
     let n = 0;
     for (const part of String(baseString).split(";")) {
       const p = part.split(","); if (!p[0]) continue;
@@ -83,6 +104,21 @@ function createAutonomy({ getBots, enableParty, sendToUser }) {
       try { bot.sendRpc("MakeBuilding", { type, x: center.x - (+p[1]), y: center.y - (+p[2]), yaw: (+p[3]) || 0 }); n++; } catch {}
     }
     return n;
+  }
+  // Sell-to-escape: if a bot is wedged against its own buildings, delete
+  // the nearest non-stash building so it can walk free (auto-rebuild puts
+  // it back once Auto Upgrade is running).
+  function sellToEscape(bot) {
+    if (!bot.buildings || !bot.myPlayer || !bot.myPlayer.position) return false;
+    const p = bot.myPlayer.position;
+    let best = null, bd = Infinity;
+    for (const bld of bot.buildings.values()) {
+      if (bld.dead || bld.type === "GoldStash") continue;
+      const d = Math.hypot(bld.x - p.x, bld.y - p.y);
+      if (d < 90 && d < bd) { bd = d; best = bld; }
+    }
+    if (best) { try { bot.sendRpc("DeleteBuilding", { uid: best.uid }); } catch {} return true; }
+    return false;
   }
   function setPhase(job, phase, status) { job.phase = phase; job.status = status; job.phaseT0 = Date.now(); }
 
@@ -135,31 +171,57 @@ function createAutonomy({ getBots, enableParty, sendToUser }) {
       // stockpile — 3k of each — or 5 min as a fallback, then build.
       if ((wood >= 3000 && stone >= 3000) || elapsed > 300000) {
         job.builderId = b.id;
-        try { b.gotoPoint(job.spot.base.x, job.spot.base.y); } catch {}
+        // Stand just outside the base footprint, facing the farm.
+        job.approach = approachPoint(job.spot.base, job.spot.farm.mid, job.baseRadius);
+        try { b.gotoPoint(job.approach.x, job.approach.y); } catch {}
         setPhase(job, "build", "Sending the loaded bot to build the base…");
       }
 
     } else if (job.phase === "build") {
       const b = bots.find((x) => x.id === job.builderId) || mostLoaded(bots);
-      const d = dist(b.myPlayer.position, job.spot.base);
-      if (d < 160) {
-        const n = placeBase(b, job.spot.base, job.baseString);
-        for (const bot of bots) { try { bot.gotoPoint(job.spot.base.x, job.spot.base.y); } catch {} }
-        setPhase(job, "recall", `Base placed (${n} parts) — recalling the party…`);
-      } else if (elapsed > 240000) {
-        setPhase(job, "failed", "Builder couldn't reach the base — try again (clear path / daytime).");
-      } else {
-        // Keep re-issuing so the bot commits to the trip even if its farm
-        // nav or a stuck-recovery tried to pull it back.
-        try { b.gotoPoint(job.spot.base.x, job.spot.base.y); } catch {}
-        job.status = `Building — bot ${Math.round(d)}u from base…`;
+      const ap = job.approach;
+      const d = dist(b.myPlayer.position, ap);
+      if (d >= 180) {
+        if (elapsed > 240000) return setPhase(job, "failed", "Builder couldn't reach the base — try again (clear path / daytime).");
+        try { b.gotoPoint(ap.x, ap.y); } catch {}   // keep committing to the trip
+        job.status = `Heading to build — ${Math.round(d)}u away…`;
+        return;
       }
+      // Arrived just outside the footprint. STAGE 1: place + confirm the
+      // GoldStash — nothing else can be placed until it exists.
+      if (!stashNear(b, job.spot.base)) {
+        if (!job.stashSentAt || Date.now() - job.stashSentAt > 3000) {
+          try { b.sendRpc("MakeBuilding", { type: "GoldStash", x: job.spot.base.x, y: job.spot.base.y, yaw: 0 }); } catch {}
+          job.stashSentAt = Date.now();
+        }
+        job.status = "Placing GoldStash…";
+        if (Date.now() - (job.stashFirstTry || (job.stashFirstTry = Date.now())) > 45000) {
+          return setPhase(job, "failed", "Couldn't place a GoldStash — the party may already have a base.");
+        }
+        return;
+      }
+      // STAGE 2: stash confirmed → place the rest, settle outside the base.
+      const n = placeBuildings(b, job.spot.base, job.baseString);
+      setPhase(job, "recall", `Base placed (${n} parts) — settling the party…`);
 
     } else if (job.phase === "recall") {
-      const atBase = bots.filter((x) => dist(x.myPlayer.position, job.spot.base) < 280).length;
-      job.status = `Recalling to base (${atBase}/${bots.length})…`;
-      for (const bot of bots) { try { bot.gotoPoint(job.spot.base.x, job.spot.base.y); } catch {} }
-      if (atBase >= Math.max(1, Math.ceil(bots.length * 0.6)) || elapsed > 60000) {
+      // Settle OUTSIDE the base (the approach point), not on the towers,
+      // so bots don't wedge inside; the coordinator anchors home here.
+      const target = job.approach || job.spot.base;
+      if (!job._stuck) job._stuck = {};
+      let atBase = 0;
+      for (const bot of bots) {
+        const pos = bot.myPlayer.position;
+        const here = dist(pos, target) < 320;
+        if (here) { atBase++; continue; }
+        try { bot.gotoPoint(target.x, target.y); } catch {}
+        // Stuck detection → sell-to-escape.
+        const st = job._stuck[bot.id] || (job._stuck[bot.id] = { x: pos.x, y: pos.y, since: Date.now() });
+        if (Math.hypot(pos.x - st.x, pos.y - st.y) > 25) { st.x = pos.x; st.y = pos.y; st.since = Date.now(); }
+        else if (Date.now() - st.since > 5000) { sellToEscape(bot); st.since = Date.now(); }
+      }
+      job.status = `Settling at base (${atBase}/${bots.length})…`;
+      if (atBase >= Math.max(1, Math.ceil(bots.length * 0.6)) || elapsed > 70000) {
         enableParty(job.userId, job.partyId, true);
         setPhase(job, "done", "✓ Autonomous: Auto Upgrade running — farm ↔ base ↔ upgrade.");
       }
