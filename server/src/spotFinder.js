@@ -18,10 +18,15 @@ const EDGE_MARGIN = 300;          // keep the base off the map border
 
 const FARM_PAIR_MAX = 95;         // tree↔stone gap for a single bot (overlap)
 
+const TOWER = 96;                 // a tower's footprint length (2 grid cells)
 const GRID_STEP = 220;            // open-site sampling resolution
 const BASE_CLEAR_MIN = 340;       // a base site must clear resources by >= this
 const SAFE_BASE_DIST = 700;       // …and sit >= this from any enemy base
-const FARM_NEAR_BASE = 1000;      // …with a farm pair within this (shuttle range)
+// The farm must sit a SAFE distance from the base — zombies spawn around
+// the GoldStash, so a too-close farm gets caught in the wave. Min = 32
+// tower-lengths from the stash; cap the far end so the shuttle stays sane.
+const FARM_DIST_MIN = 32 * TOWER; // 3072u — clear of the base's zombie ring
+const FARM_DIST_MAX = 8000;       // …but still reachable for the farm↔base run
 
 const MERGE_DIST = 700;           // collapse base sites whose areas overlap
 const RETURN_N = 8;
@@ -79,15 +84,18 @@ function findSpots(spots, bases, opts = {}) {
       if (clr < minClear) continue;
       const baseDist = bases.length ? nearest(gx, gy, bases) : Infinity;
       if (baseDist < SAFE_BASE_DIST) continue;
-      // 3) Nearest eligible farm to this site.
+      // 3) Closest eligible farm that is FAR ENOUGH from the base (clear of
+      //    the zombie ring) but still within the shuttle cap.
       let farm = null, fd = Infinity;
       for (const f of farms) {
         const d = Math.hypot(gx - f.mid.x, gy - f.mid.y);
+        if (d < FARM_DIST_MIN || d > FARM_DIST_MAX) continue;
         if (d < fd) { fd = d; farm = f; }
       }
-      if (fd > FARM_NEAR_BASE) continue;     // no farm reachable from here
+      if (!farm) continue;                   // no safely-distant farm from here
       const safety = Math.min(baseDist, 3000);
-      const score = clr * 1.4 + safety * 0.4 - fd * 0.5 - farm.gap * 0.6;
+      // Prefer farms just past the safety threshold (least extra walking).
+      const score = clr * 1.4 + safety * 0.4 - (fd - FARM_DIST_MIN) * 0.3 - farm.gap * 0.6;
       sites.push({ x: gx, y: gy, clr, baseDist, farm, fd, score });
     }
   }

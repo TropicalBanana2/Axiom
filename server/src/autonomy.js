@@ -58,6 +58,10 @@ function createAutonomy({ getBots, enableParty, sendToUser }) {
   function richest(bots) {
     return bots.slice().sort((a, b) => (b.myPlayer.gold || 0) - (a.myPlayer.gold || 0))[0];
   }
+  function mostLoaded(bots) {
+    const r = (p) => (p.myPlayer.wood || 0) + (p.myPlayer.stone || 0);
+    return bots.slice().sort((a, b) => r(b) - r(a))[0];
+  }
   function applyFarm(bots, spot) {
     const mid = spot.farm.mid, targets = [spot.farm.tree, spot.farm.stone];
     for (const b of bots) {
@@ -123,23 +127,26 @@ function createAutonomy({ getBots, enableParty, sendToUser }) {
       setPhase(job, "farm", "Farming the pair to gather materials…");
 
     } else if (job.phase === "farm") {
-      const r = richest(bots);
-      const wood = r.myPlayer.wood || 0, stone = r.myPlayer.stone || 0;
-      job.status = `Farming — ${wood}w ${stone}s (${Math.round(elapsed / 1000)}s)`;
-      if ((wood >= 500 && stone >= 500) || elapsed > 120000) {
-        job.builderId = r.id;
-        try { r.gotoPoint(job.spot.base.x, job.spot.base.y); } catch {}
-        setPhase(job, "build", "Sending a bot to build the base…");
+      // The builder is whichever bot has gathered the most wood+stone.
+      const b = mostLoaded(bots);
+      const wood = b.myPlayer.wood || 0, stone = b.myPlayer.stone || 0;
+      job.status = `Farming — best bot ${wood}w ${stone}s of 3000 (${Math.round(elapsed / 1000)}s)`;
+      // Build costs wood+stone (placement is gold-free), so wait for a real
+      // stockpile — 3k of each — or 5 min as a fallback, then build.
+      if ((wood >= 3000 && stone >= 3000) || elapsed > 300000) {
+        job.builderId = b.id;
+        try { b.gotoPoint(job.spot.base.x, job.spot.base.y); } catch {}
+        setPhase(job, "build", "Sending the loaded bot to build the base…");
       }
 
     } else if (job.phase === "build") {
-      const b = bots.find((x) => x.id === job.builderId) || richest(bots);
+      const b = bots.find((x) => x.id === job.builderId) || mostLoaded(bots);
       const d = dist(b.myPlayer.position, job.spot.base);
-      if (d < 140) {
+      if (d < 160) {
         const n = placeBase(b, job.spot.base, job.baseString);
         for (const bot of bots) { try { bot.gotoPoint(job.spot.base.x, job.spot.base.y); } catch {} }
         setPhase(job, "recall", `Base placed (${n} parts) — recalling the party…`);
-      } else if (elapsed > 120000) {
+      } else if (elapsed > 240000) {
         setPhase(job, "failed", "Builder couldn't reach the base — try again (clear path / daytime).");
       } else {
         // Keep re-issuing so the bot commits to the trip even if its farm
