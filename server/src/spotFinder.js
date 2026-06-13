@@ -109,8 +109,14 @@ function findSpots(spots, bases, opts = {}) {
     kept.push(s);
     if (kept.length >= returnN) break;
   }
+  // Snap the base centre to the 48-unit building grid — a 2×2 GoldStash
+  // centres on a cell boundary (multiple of 48), and a saved base's
+  // offsets are grid-aligned relative to it, so snapping the centre makes
+  // the whole layout valid. Raw (un-snapped) coords are rejected by the
+  // server as BadPositionOnGrid.
+  const snap48 = (v) => Math.round(v / 48) * 48;
   return kept.map((s) => ({
-    base: { x: Math.round(s.x), y: Math.round(s.y), clearance: Math.round(s.clr) },
+    base: { x: snap48(s.x), y: snap48(s.y), clearance: Math.round(s.clr) },
     farm: {
       tree: { x: Math.round(s.farm.t.x), y: Math.round(s.farm.t.y) },
       stone: { x: Math.round(s.farm.s.x), y: Math.round(s.farm.s.y) },
