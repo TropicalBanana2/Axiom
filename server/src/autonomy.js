@@ -97,16 +97,78 @@ function createAutonomy({ getBots, enableParty, sendToUser }) {
     const off = Math.min(radius + 240, 500);
     return { x: Math.round(center.x + (dx / d) * off), y: Math.round(center.y + (dy / d) * off) };
   }
-  // Place every base building (NOT the stash — that's placed + confirmed
-  // first). Positions are relative to the stash centre.
-  function placeBuildings(bot, center, baseString) {
-    let n = 0;
+  // Expand a saved base into an absolute build queue (NOT the stash — that's
+  // placed + confirmed first). Each item is the world-space centre of one
+  // building; offsets are stash→building, matching the saved-base format.
+  function buildQueue(center, baseString) {
+    const q = [];
     for (const part of String(baseString).split(";")) {
       const p = part.split(","); if (!p[0]) continue;
       const type = TOWERS[+p[0]]; if (!type) continue;
-      try { bot.sendRpc("MakeBuilding", { type, x: center.x - (+p[1]), y: center.y - (+p[2]), yaw: (+p[3]) || 0 }); n++; } catch {}
+      q.push({ type, x: center.x - (+p[1]), y: center.y - (+p[2]), yaw: (+p[3]) || 0, badCount: 0 });
     }
-    return n;
+    return q;
+  }
+  // Is this queued building actually standing right now? Read from the bot's
+  // LIVE building map — so a piece the bot sold to escape reads as missing
+  // and gets rebuilt on a later pass ("sell out, rebuild behind it").
+  function placedAt(bot, item, r = 40) {
+    if (!bot.buildings) return false;
+    for (const b of bot.buildings.values()) {
+      if (b.dead || b.type !== item.type) continue;
+      if (Math.hypot(b.x - item.x, b.y - item.y) <= r) return true;
+    }
+    return false;
+  }
+  // Where to stand to place `item`: one step toward the stash centre, so the
+  // builder is NEVER on the item's own cell (the server rejects that) but is
+  // well within the 576u build range.
+  function buildFromPoint(item, center) {
+    const dx = center.x - item.x, dy = center.y - item.y;
+    const d = Math.hypot(dx, dy);
+    if (d < 1) return { x: item.x + 96, y: item.y };   // item is the centre
+    const off = 96;
+    return { x: Math.round(item.x + (dx / d) * off), y: Math.round(item.y + (dy / d) * off) };
+  }
+  // The nearest building still missing — lets the builder walk the footprint
+  // placing as it goes, instead of blasting everything from one spot.
+  function nextItem(bot, queue) {
+    const p = bot.myPlayer.position;
+    let best = null, bd = Infinity;
+    for (const it of queue) {
+      if (it.bad || placedAt(bot, it)) continue;
+      const d = Math.hypot(it.x - p.x, it.y - p.y);
+      if (d < bd) { bd = d; best = it; }
+    }
+    return best;
+  }
+  const MIN_MAT = 250;                 // below this a builder is "out" and hands off
+  const mat = (b) => (b.myPlayer.wood || 0) + (b.myPlayer.stone || 0);
+  const lowMat = (b) => (b.myPlayer.wood || 0) < MIN_MAT || (b.myPlayer.stone || 0) < MIN_MAT;
+  // Grant every party member sell permission, so a wedged bot can delete ANY
+  // building (its own or a teammate's) to escape. Only the leader can set it.
+  function grantSellPermissions(bots) {
+    for (const b of bots) {
+      const members = b.partyInfo || (b.party && b.party.members) || [];
+      const me = members.find((m) => m.playerUid === b.uid);
+      if (!me || me.isLeader !== 1) continue;
+      let all = true;
+      for (const m of members) {
+        if (m.canSell === 1) continue;
+        all = false;
+        try { b.sendRpc("SetPartyMemberCanSell", { uid: m.playerUid, canSell: 1 }); } catch {}
+      }
+      return all;
+    }
+    return false;
+  }
+  // Re-issue a walk target only when it actually moves, to avoid path thrash.
+  function maybeGoto(bot, job, pt) {
+    const cur = job.curTarget;
+    if (!cur || Math.hypot(cur.x - pt.x, cur.y - pt.y) > 24) {
+      try { bot.gotoPoint(pt.x, pt.y); } catch {}
+      job.curTarget = { x: Math.round(pt.x), y: Math.round(pt.y) };
+    }
   }
   // Sell-to-escape: if a bot is wedged against its own buildings, delete
   // the nearest non-stash building so it can walk free (auto-rebuild puts
@@ -176,49 +238,111 @@ function createAutonomy({ getBots, enableParty, sendToUser }) {
         job.builderId = b.id;
         // Stand just outside the base footprint, facing the farm.
         job.approach = approachPoint(job.spot.base, job.spot.farm.mid, job.baseRadius);
+        job.queue = buildQueue(job.spot.base, job.baseString);
+        job.stashDone = false; job.curTarget = null;
         try { b.gotoPoint(job.approach.x, job.approach.y); } catch {}
         setPhase(job, "build", "Sending the loaded bot to build the base…");
       }
 
     } else if (job.phase === "build") {
-      const b = bots.find((x) => x.id === job.builderId) || mostLoaded(bots);
-      const ap = job.approach;
-      const d = dist(b.myPlayer.position, ap);
-      if (d >= 180) {
-        if (elapsed > 240000) return setPhase(job, "failed", "Builder couldn't reach the base — try again (clear path / daytime).");
-        try { b.gotoPoint(ap.x, ap.y); } catch {}   // keep committing to the trip
-        job.status = `Heading to build — ${Math.round(d)}u away…`;
-        return;
+      const center = job.spot.base;
+      // Make sure every party member can sell, so any wedged bot can delete
+      // a neighbour's wall to free itself. Retry until all are granted.
+      if (!job.sellGranted && (!job.sellTryAt || Date.now() - job.sellTryAt > 5000)) {
+        job.sellGranted = grantSellPermissions(bots);
+        job.sellTryAt = Date.now();
       }
-      // Arrived just outside the footprint. STAGE 1: place + confirm the
-      // GoldStash — nothing else can be placed until it exists. The builder
-      // stands at the approach point (off the stash's own cell), since the
-      // server rejects placing on the player's tile.
-      if (!stashNear(b, job.spot.base)) {
-        // Never place while standing on the stash's own cell — the server
-        // rejects that. Step off to the approach point first.
-        if (dist(b.myPlayer.position, job.spot.base) < 100) {
-          try { b.gotoPoint(ap.x, ap.y); } catch {}
-          job.status = "Stepping off the stash cell…";
+
+      // Pick the active builder. Hand off when the current one runs dry: send
+      // it back to farm and bring in the most-loaded fresh bot. If everyone's
+      // empty, wait while the party farms.
+      let b = job.builderId ? bots.find((x) => x.id === job.builderId) : null;
+      if (b && (b.myPlayer.dead || lowMat(b))) {
+        try { b.setNavActive(true); } catch {}        // depleted builder → farm
+        b = null; job.builderId = null; job.curTarget = null;
+      }
+      if (!b) {
+        b = bots.filter((x) => !lowMat(x)).sort((x, y) => mat(y) - mat(x))[0];
+        if (!b) { job.status = "Out of materials — party is refarming…"; return; }
+        job.builderId = b.id; job.curTarget = null;
+      }
+      const me = b.myPlayer.position;
+
+      // STAGE 1: GoldStash first — nothing else can be placed until it exists.
+      // Stand off its own cell (the server rejects placing on the player tile).
+      if (!job.stashDone) {
+        if (stashNear(b, center)) { job.stashDone = true; }
+        else {
+          const ap = job.approach;
+          if (dist(me, ap) > 180) {
+            if (elapsed > 240000) return setPhase(job, "failed", "Builder couldn't reach the base — try again (clear path / daytime).");
+            maybeGoto(b, job, ap);
+            job.status = `Heading to base — ${Math.round(dist(me, ap))}u away…`;
+            return;
+          }
+          if (dist(me, center) < 100) { maybeGoto(b, job, ap); job.status = "Stepping off the stash cell…"; return; }
+          if (!job.stashSentAt || Date.now() - job.stashSentAt > 2500) {
+            try { b.sendRpc("MakeBuilding", { type: "GoldStash", x: center.x, y: center.y, yaw: 0 }); } catch {}
+            job.stashSentAt = Date.now();
+          }
+          const f = b._lastFailure, rf = f && f.type === "GoldStash" && Date.now() - f.at < 4000;
+          job.status = rf ? `GoldStash rejected: ${f.reason || f.category}` : "Placing GoldStash…";
+          if (Date.now() - (job.stashFirstTry || (job.stashFirstTry = Date.now())) > 45000) {
+            const why = (f && (f.reason || f.category)) || "no confirmation from server";
+            return setPhase(job, "failed", `Couldn't place a GoldStash (${why}).`);
+          }
           return;
         }
-        if (!job.stashSentAt || Date.now() - job.stashSentAt > 3000) {
-          try { b.sendRpc("MakeBuilding", { type: "GoldStash", x: job.spot.base.x, y: job.spot.base.y, yaw: 0 }); } catch {}
-          job.stashSentAt = Date.now();
+      }
+
+      // STAGE 2: walk the footprint, placing the nearest missing building.
+      const placed = job.queue.filter((it) => placedAt(b, it)).length;
+      const remaining = job.queue.filter((it) => !it.bad && !placedAt(b, it));
+      if (!remaining.length || Date.now() - job.phaseT0 > 240000) {
+        return setPhase(job, "recall", `Base built (${placed}/${job.queue.length} parts) — settling the party…`);
+      }
+      const item = nextItem(b, job.queue) || remaining[0];
+      const from = buildFromPoint(item, center);
+      const dFrom = dist(me, from);
+
+      // Stuck/wedge detection: while walking to a build-from point, if the
+      // position stops changing we're wedged between buildings → sell the
+      // nearest blocker, then re-path (it's rebuilt on a later pass).
+      const st = job._stuck || (job._stuck = { x: me.x, y: me.y, since: Date.now() });
+      if (Math.hypot(me.x - st.x, me.y - st.y) > 25) { st.x = me.x; st.y = me.y; st.since = Date.now(); }
+
+      if (dFrom > 70 || dist(me, item) < 60) {
+        // New destination (just finished a piece, or switched targets): start
+        // heading there with a FRESH stuck timer so standing-to-place doesn't
+        // look like a wedge.
+        const changed = !job.curTarget || Math.hypot(job.curTarget.x - from.x, job.curTarget.y - from.y) > 24;
+        if (changed) {
+          maybeGoto(b, job, from);
+          st.x = me.x; st.y = me.y; st.since = Date.now();
+          job.status = `Building ${placed}/${job.queue.length} — moving to ${item.type}…`;
+          return;
         }
-        // Surface the server's rejection reason if one came back.
-        const f = b._lastFailure;
-        const recentFail = f && f.type === "GoldStash" && Date.now() - f.at < 4000;
-        job.status = recentFail ? `GoldStash rejected: ${f.reason || f.category}` : "Placing GoldStash…";
-        if (Date.now() - (job.stashFirstTry || (job.stashFirstTry = Date.now())) > 45000) {
-          const why = (f && (f.reason || f.category)) || "no confirmation from server";
-          return setPhase(job, "failed", `Couldn't place a GoldStash (${why}).`);
+        if (Date.now() - st.since > 4000) {            // wedged on the way there
+          const sold = sellToEscape(b);
+          st.since = Date.now(); job.curTarget = null;
+          job.status = sold ? "Wedged — selling out (will rebuild)…" : `Moving to ${item.type}…`;
+          return;
         }
+        maybeGoto(b, job, from);
+        job.status = `Building ${placed}/${job.queue.length} — moving to ${item.type}…`;
         return;
       }
-      // STAGE 2: stash confirmed → place the rest, settle outside the base.
-      const n = placeBuildings(b, job.spot.base, job.baseString);
-      setPhase(job, "recall", `Base placed (${n} parts) — settling the party…`);
+
+      // In position and clear of the cell → place it (rate-limited).
+      if (!job.lastSendAt || Date.now() - job.lastSendAt > 1200) {
+        try { b.sendRpc("MakeBuilding", { type: item.type, x: item.x, y: item.y, yaw: item.yaw }); } catch {}
+        job.lastSendAt = Date.now();
+        const f = b._lastFailure;
+        if (f && Date.now() - f.at < 2000 && f.type === item.type && /grid/i.test(f.reason || "")) {
+          if (++item.badCount >= 3) item.bad = true;   // unplaceable cell — skip it
+        }
+      }
+      job.status = `Building ${placed}/${job.queue.length} — placing ${item.type}…`;
 
     } else if (job.phase === "recall") {
       // Settle OUTSIDE the base (the approach point), not on the towers,
