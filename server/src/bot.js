@@ -753,6 +753,14 @@ class Bot extends EventEmitter {
     if (!data || !data.name) return;
     const r = data.response;
     switch (data.name) {
+      case "Failure":
+        // The server rejected an action (placement, upgrade, buy, …). Log
+        // the reason so build failures are visible server-side, and surface
+        // it on the bot for callers (the autonomy reads _lastFailure).
+        this._lastFailure = { ...(r || data), at: Date.now() };
+        console.error(`[bot ${this.id}] Failure:`, JSON.stringify(r || data));
+        this.emit("failure", this._lastFailure);
+        break;
       case "PartyShareKey":
         if (r && r.partyShareKey) this.party.shareKey = r.partyShareKey;
         break;

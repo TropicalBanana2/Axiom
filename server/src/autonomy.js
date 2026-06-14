@@ -91,7 +91,10 @@ function createAutonomy({ getBots, enableParty, sendToUser }) {
   function approachPoint(center, farmMid, radius) {
     const dx = farmMid.x - center.x, dy = farmMid.y - center.y;
     const d = Math.hypot(dx, dy) || 1;
-    const off = radius + 70;
+    // Stand well clear of the centre (bigger than the arrival tolerance so
+    // the bot can't "arrive" on the stash cell), but within the 576u build
+    // range so it can still place the stash + inner buildings.
+    const off = Math.min(radius + 240, 500);
     return { x: Math.round(center.x + (dx / d) * off), y: Math.round(center.y + (dy / d) * off) };
   }
   // Place every base building (NOT the stash — that's placed + confirmed
@@ -188,15 +191,28 @@ function createAutonomy({ getBots, enableParty, sendToUser }) {
         return;
       }
       // Arrived just outside the footprint. STAGE 1: place + confirm the
-      // GoldStash — nothing else can be placed until it exists.
+      // GoldStash — nothing else can be placed until it exists. The builder
+      // stands at the approach point (off the stash's own cell), since the
+      // server rejects placing on the player's tile.
       if (!stashNear(b, job.spot.base)) {
+        // Never place while standing on the stash's own cell — the server
+        // rejects that. Step off to the approach point first.
+        if (dist(b.myPlayer.position, job.spot.base) < 100) {
+          try { b.gotoPoint(ap.x, ap.y); } catch {}
+          job.status = "Stepping off the stash cell…";
+          return;
+        }
         if (!job.stashSentAt || Date.now() - job.stashSentAt > 3000) {
           try { b.sendRpc("MakeBuilding", { type: "GoldStash", x: job.spot.base.x, y: job.spot.base.y, yaw: 0 }); } catch {}
           job.stashSentAt = Date.now();
         }
-        job.status = "Placing GoldStash…";
+        // Surface the server's rejection reason if one came back.
+        const f = b._lastFailure;
+        const recentFail = f && f.type === "GoldStash" && Date.now() - f.at < 4000;
+        job.status = recentFail ? `GoldStash rejected: ${f.reason || f.category}` : "Placing GoldStash…";
         if (Date.now() - (job.stashFirstTry || (job.stashFirstTry = Date.now())) > 45000) {
-          return setPhase(job, "failed", "Couldn't place a GoldStash — the party may already have a base.");
+          const why = (f && (f.reason || f.category)) || "no confirmation from server";
+          return setPhase(job, "failed", `Couldn't place a GoldStash (${why}).`);
         }
         return;
       }
