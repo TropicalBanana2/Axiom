@@ -126,8 +126,10 @@ function createAutonomy({ getBots, enableParty, sendToUser }) {
   function buildFromPoint(item, center) {
     const dx = center.x - item.x, dy = center.y - item.y;
     const d = Math.hypot(dx, dy);
-    if (d < 1) return { x: item.x + 96, y: item.y };   // item is the centre
-    const off = 96;
+    if (d < 1) return { x: item.x + 130, y: item.y };  // item is the centre
+    // 130u clears a 2×2 tower's footprint (±48) plus the player's own radius,
+    // so the builder never obstructs its own placement, yet stays well in range.
+    const off = 130;
     return { x: Math.round(item.x + (dx / d) * off), y: Math.round(item.y + (dy / d) * off) };
   }
   // The nearest building still missing — lets the builder walk the footprint
@@ -186,6 +188,21 @@ function createAutonomy({ getBots, enableParty, sendToUser }) {
     return false;
   }
   function setPhase(job, phase, status) { job.phase = phase; job.status = status; job.phaseT0 = Date.now(); }
+  // Abandon the current spot (it's blocked) and retarget the next candidate.
+  // Only valid BEFORE the GoldStash is committed — you can't move a stash.
+  function advanceSpot(job, bots, why) {
+    job.spotIndex = (job.spotIndex || 0) + 1;
+    if (!job.spots || job.spotIndex >= job.spots.length) {
+      return setPhase(job, "failed", `Every candidate spot was blocked (${why}).`);
+    }
+    job.spot = job.spots[job.spotIndex];
+    applyFarm(bots, job.spot);
+    job.approach = approachPoint(job.spot.base, job.spot.farm.mid, job.baseRadius);
+    job.queue = buildQueue(job.spot.base, job.baseString);
+    job.stashDone = false; job.stashSentAt = 0; job.stashFirstTry = 0;
+    job.curTarget = null; job._stuck = null;
+    job.status = `Spot blocked (${why}) — trying spot #${job.spotIndex + 1}…`;
+  }
 
   function start(userId, partyId, baseString) {
     const bots = partyBots(userId, partyId);
@@ -223,7 +240,9 @@ function createAutonomy({ getBots, enableParty, sendToUser }) {
         return setPhase(job, "failed",
           `No open area large enough for this base (needs ${job.baseRadius}u clear). Try a smaller base.`);
       }
-      job.spot = cands[0];
+      // Keep ALL candidates so we can skip to the next if a spot turns out
+      // to be blocked (an enemy base the scanner didn't know about).
+      job.spots = cands; job.spotIndex = 0; job.spot = cands[0];
       applyFarm(bots, job.spot);
       setPhase(job, "farm", "Farming the pair to gather materials…");
 
@@ -286,10 +305,14 @@ function createAutonomy({ getBots, enableParty, sendToUser }) {
             job.stashSentAt = Date.now();
           }
           const f = b._lastFailure, rf = f && f.type === "GoldStash" && Date.now() - f.at < 4000;
+          // The spot is occupied (an enemy base / structure the scanner
+          // missed) — the stash can't go down here, so move to the next spot.
+          if (rf && /obstruct/i.test(f.reason || "")) {
+            return advanceSpot(job, bots, "stash obstructed");
+          }
           job.status = rf ? `GoldStash rejected: ${f.reason || f.category}` : "Placing GoldStash…";
           if (Date.now() - (job.stashFirstTry || (job.stashFirstTry = Date.now())) > 45000) {
-            const why = (f && (f.reason || f.category)) || "no confirmation from server";
-            return setPhase(job, "failed", `Couldn't place a GoldStash (${why}).`);
+            return advanceSpot(job, bots, (f && (f.reason || f.category)) || "no confirmation");
           }
           return;
         }
@@ -338,8 +361,10 @@ function createAutonomy({ getBots, enableParty, sendToUser }) {
         try { b.sendRpc("MakeBuilding", { type: item.type, x: item.x, y: item.y, yaw: item.yaw }); } catch {}
         job.lastSendAt = Date.now();
         const f = b._lastFailure;
-        if (f && Date.now() - f.at < 2000 && f.type === item.type && /grid/i.test(f.reason || "")) {
-          if (++item.badCount >= 3) item.bad = true;   // unplaceable cell — skip it
+        // Unplaceable cell (bad grid, or something permanently in the way) —
+        // skip it after a few tries so one blocked tile can't stall the base.
+        if (f && Date.now() - f.at < 2000 && f.type === item.type && /grid|obstruct/i.test(f.reason || "")) {
+          if (++item.badCount >= 4) item.bad = true;
         }
       }
       job.status = `Building ${placed}/${job.queue.length} — placing ${item.type}…`;
