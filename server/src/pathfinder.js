@@ -44,7 +44,16 @@ const STONE_RADIUS = 48;
 const PLAYER_RADIUS = 6;
 
 const tileOf = (v) => Math.floor(v / TILE);
-const keyOf = (tx, ty) => tx + "," + ty;
+// INTEGER tile key (not "tx,ty" string). A* does ~16 key ops per iteration ×
+// up to MAX_ITER, so string concat + hashing dominated each call (~80ms),
+// which forced a tight pathfinding budget and stalled bots. Integer keys are
+// ~10× faster. Offset keeps modestly-negative tiles (obstacles near the map
+// edge) positive; stride > any tile index (map is ~1000 tiles + margin).
+const KEY_OFF = 4096;
+const KEY_STRIDE = 100000;
+const keyOf = (tx, ty) => (tx + KEY_OFF) * KEY_STRIDE + (ty + KEY_OFF);
+const unkeyTx = (k) => Math.floor(k / KEY_STRIDE) - KEY_OFF;
+const unkeyTy = (k) => (k % KEY_STRIDE) - KEY_OFF;
 
 // True if a world point is inside the search window (+ a little slack so
 // an obstacle just outside still blocks the tiles at the edge).
@@ -242,7 +251,12 @@ function findPath(bot, start, goal) {
   const closed = new Set();
 
   let iterations = 0;
-  const MAX_ITER = 200000;    // hard cap so a pathological case can't hang
+  // Hard cap so a pathological (unreachable) goal can't loop forever. With the
+  // INTEGER-keyed grid each iteration is cheap (~ns), so even a full 100k-iter
+  // search is only ~10ms — high enough for long, winding cross-map farm trips
+  // to actually succeed, low enough that a single call never spikes a tick.
+  // (Do NOT drop this low — 15k made the far farm unreachable → bots wouldn't go.)
+  const MAX_ITER = 100000;
 
   while (open.size) {
     if (++iterations > MAX_ITER) return null;
@@ -258,7 +272,7 @@ function findPath(bot, start, goal) {
       while (k) { tiles.push(k); k = came.get(k); }
       tiles.reverse();
       const pts = tiles.map((key) => {
-        const [tx, ty] = key.split(",").map(Number);
+        const tx = unkeyTx(key), ty = unkeyTy(key);
         return { x: tx * TILE + TILE / 2, y: ty * TILE + TILE / 2 };
       });
       pts.shift();                       // drop the start tile

@@ -589,6 +589,28 @@ function createCoordinator({ getBots, sendToUser }) {
     lastMoveAt.set(bot.id, now);
   }
 
+  // Seed the rebuild memory with a base's FULL intended layout (handed over by
+  // the autonomy when it enables Auto Upgrade). Every piece is marked
+  // "established", so rebuildPass treats any MISSING one — a void left by a
+  // sold escape, a slot the build never reached, or a zombie-destroyed tower —
+  // as something to rebuild. The base then self-heals and completes itself.
+  // `pieces`: [{ type, x, y }, ...] in world coords (GoldStash skipped). Keys
+  // MUST match rebuildPass's keyOf (type|round(x/24)|round(y/24)).
+  function seedBaseLayout(partyId, pieces) {
+    partyId = +partyId;
+    if (!Array.isArray(pieces) || !pieces.length) return;
+    let mem = baseMemory.get(partyId);
+    if (!mem) { mem = new Map(); baseMemory.set(partyId, mem); }
+    const TILE = 24, now = Date.now();
+    for (const p of pieces) {
+      if (!p || !p.type || p.type === "GoldStash") continue;
+      if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) continue;
+      const key = p.type + "|" + Math.round(p.x / TILE) + "|" + Math.round(p.y / TILE);
+      if (mem.has(key)) continue;
+      mem.set(key, { type: p.type, x: p.x, y: p.y, firstSeen: now, established: true });
+    }
+  }
+
   // Auto-rebuild: remember the established base layout per party and, when
   // a building vanishes (destroyed), place a fresh tier-1 in its slot from
   // an affordable in-range bot (or walk the nearest one over). Smart upgrade
@@ -1236,7 +1258,7 @@ function createCoordinator({ getBots, sendToUser }) {
   const timer = setInterval(tick, TICK_MS);
   timer.unref && timer.unref();
 
-  return { setTuning, setPartyEnabled, getConfig, getStatus };
+  return { setTuning, setPartyEnabled, getConfig, getStatus, seedBaseLayout };
 }
 
 module.exports = { createCoordinator };

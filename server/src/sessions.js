@@ -165,7 +165,15 @@ const smartUpgrade = createCoordinator({
 const { createAutonomy } = require("./autonomy");
 const autonomy = createAutonomy({
   getBots: () => bots.values(),
-  enableParty: (userId, partyId, enabled) => smartUpgrade.setPartyEnabled(userId, partyId, enabled),
+  enableParty: (userId, partyId, enabled) => {
+    const cfg = smartUpgrade.setPartyEnabled(userId, partyId, enabled);
+    // Push the new config so the dashboard's Auto Upgrade toggle flips on the
+    // moment the autonomy finishes building (otherwise it'd look still-off).
+    userSessionsBroadcast(userId, { op: "smartUpgradeConfig", data: cfg });
+  },
+  // Hand the finished base's full layout to the coordinator so it self-heals
+  // any missing piece (voids, unbuilt slots, zombie damage) — see seedBaseLayout.
+  seedLayout: (partyId, pieces) => smartUpgrade.seedBaseLayout(partyId, pieces),
   sendToUser: (userId, frame) => userSessionsBroadcast(userId, frame),
 });
 
@@ -250,7 +258,11 @@ function _wireBot(bot, userId) {
     // Log only the FIRST drop of a streak — a long server outage otherwise
     // fills the log with one line per bot per attempt. A successful
     // enter-world resets _reconnectDelay to 0, so the next drop logs again.
-    if (delay <= 3000) console.log(`[bot ${sid}] disconnected — auto-reconnecting (backoff to 60s)`);
+    if (delay <= 3000) {
+      const lc = bot._lastClose;
+      const info = lc ? ` (ws ${lc.code}${lc.reason ? ` "${lc.reason}"` : ""})` : "";
+      console.log(`[bot ${sid}] disconnected${info} — auto-reconnecting (backoff to 60s)`);
+    }
     setTimeout(() => {
       if (bots.get(sid) !== bot || shuttingDown) return;  // closed/replaced/exiting
       if (!bot.behaviours.autoReconnect) return;          // user closed during the wait
@@ -511,9 +523,20 @@ function handleJsonFrame(ws, raw, authTimer) {
     }
 
     case "autonomyStart": {
-      // { op:"autonomyStart", args:{ partyId, baseString } }
+      // { op:"autonomyStart", args:{ partyId, baseString, settle:[{dx,dy}...] } }
       const a = frame.args || {};
-      const res = autonomy.start(ws.userId, a.partyId, a.baseString);
+      const res = autonomy.start(ws.userId, a.partyId, a.baseString, a.settle);
+      // Hand control back to the BOTS — a stale "Take Control" from the user
+      // would suppress every autonomy input, so the bots would just sit there.
+      if (res && res.ok) {
+        for (const bot of bots.values()) {
+          if (bot._userId === ws.userId && bot.myPlayer &&
+              String(bot.myPlayer.partyId) === String(a.partyId)) {
+            bot._userControlling = false;
+            broadcastControl(bot.id, false);
+          }
+        }
+      }
       send(ws, { op: "autonomyResult", data: res });
       break;
     }
@@ -779,6 +802,21 @@ const spotsBootSync = setTimeout(() => worldSpots.syncFromUpstream(), 5000);
 spotsBootSync.unref && spotsBootSync.unref();
 const spotsDailySync = setInterval(() => worldSpots.syncFromUpstream(), 24 * 3600 * 1000);
 spotsDailySync.unref && spotsDailySync.unref();
+
+// Event-loop lag monitor. The whole fleet shares this one Node thread, so a long
+// synchronous stall (heavy entity decode near a big base, WASM PoW solves,
+// pathfinding) freezes EVERY bot socket at once — they miss keepalives and the
+// server drops them together with ws 1006. Logging the stall distinguishes a
+// CPU/event-loop drop (lag spikes right before the disconnect) from a
+// server-side flood kick (no lag, clean drop).
+let _lagExpected = Date.now() + 1000;
+const _lagTimer = setInterval(() => {
+  const now = Date.now();
+  const lag = now - _lagExpected;
+  if (lag > 800) console.log(`[lag] event loop blocked ~${lag}ms`);
+  _lagExpected = now + 1000;
+}, 1000);
+_lagTimer.unref && _lagTimer.unref();
 
 // Graceful shutdown — close every bot's socket cleanly, then exit.
 // Rows are left as-is; the next process boot will purgeStaleSessions().

@@ -914,8 +914,94 @@
   // Only works where the server's spots are exposed (a non-empty atlas).
   const TOWERS_BS = ["Wall", "Door", "SlowTrap", "ArrowTower", "CannonTower",
     "MeleeTower", "BombTower", "MagicTower", "GoldMine", "Harvester"];
+
+  // Tier-1 building sprites (served from /asset/pictures). Each entry is the
+  // stack of SVG layers to draw bottom→top (base platform, then the turret
+  // head), matching how the game composites a building. Bomb/Magic ship only a
+  // head, so they borrow the cannon stone base.
+  const BUILD_TEX = {
+    Wall:        ["wall/wall-t1-base.svg"],
+    Door:        ["door/door-t1-base.svg"],
+    SlowTrap:    ["slow-trap/slow-trap-t1-base.svg"],
+    GoldStash:   ["gold-stash/gold-stash-t1-base.svg"],
+    GoldMine:    ["gold-mine/gold-mine-t1-base.svg", "gold-mine/gold-mine-t1-head.svg"],
+    ArrowTower:  ["arrow-tower/arrow-tower-t1-base.svg", "arrow-tower/arrow-tower-t1-head.svg"],
+    CannonTower: ["cannon-tower/cannon-tower-t1-base.svg", "cannon-tower/cannon-tower-t1-head.svg"],
+    MeleeTower:  ["melee-tower/melee-tower-t1-base.svg", "melee-tower/melee-tower-t1-middle.svg", "melee-tower/melee-tower-t1-head.svg"],
+    BombTower:   ["cannon-tower/cannon-tower-t1-base.svg", "bomb-tower/bomb-tower-t1-head.svg"],
+    MagicTower:  ["cannon-tower/cannon-tower-t1-base.svg", "mage-tower/mage-tower-t1-head.svg"],
+    Harvester:   ["harvester/harvester-t1-base-both.svg", "harvester/harvester-t1-head.svg"],
+  };
+  // Cache loaded sprites across modal opens; fire `onload` (a redraw) once each
+  // image is ready so the canvas fills in as textures stream in.
+  const texCache = {};
+  function texImage(path, onload) {
+    let img = texCache[path];
+    if (img) return img;
+    img = new Image();
+    img.onload = () => onload && onload();
+    img.src = "/asset/pictures/" + path;
+    texCache[path] = img;
+    return img;
+  }
   function savedBases() {
     try { return JSON.parse(localStorage.getItem("axiom.baseSaver.data") || "{}"); } catch { return {}; }
+  }
+  function saveBase(name, baseString) {
+    const all = savedBases();
+    const id = "zm-" + Date.now().toString(36);
+    all[id] = { name: name || "Imported base", baseString };
+    try { localStorage.setItem("axiom.baseSaver.data", JSON.stringify(all)); } catch {}
+    return id;
+  }
+
+  // ── Zombsmatica (.zombsmatica) base import ──
+  // Decode a Zombsmatica blueprint (3 bytes/building, bit-packed — see the
+  // userscript at /asset/zombsmatica.user.js) into our baseString format
+  // ("idx,dx,dy,yaw;…", idx into TOWERS_BS, world = stash − (dx,dy)). The
+  // GoldStash is dropped (the autonomy places it itself).
+  const ZM_MODELS = ["GoldStash", "Wall", "Door", "SlowTrap", "ArrowTower", "CannonTower",
+    "MeleeTower", "BombTower", "MagicTower", "GoldMine", "Harvester"];
+  const ZM_2X2 = new Set(["GoldStash", "ArrowTower", "CannonTower", "MeleeTower",
+    "BombTower", "MagicTower", "GoldMine", "Harvester"]);
+  function decodeZombsmatica(bytes) {
+    const TILE = 48;
+    if (!bytes.length || bytes.length % 3 !== 0) throw new Error("Not a .zombsmatica file (byte length must be a multiple of 3).");
+    const parts = [];
+    for (let i = 0; i < bytes.length; i += 3) {
+      const modelIdx = ((bytes[i + 1] & 0b11) << 2) | (bytes[i + 2] >> 3);
+      const model = ZM_MODELS[modelIdx];
+      if (!model || model === "GoldStash") continue;   // stash is placed by the autonomy
+      const g = ZM_2X2.has(model) ? 2 : 1;             // footprint in cells
+      const xSide = ((bytes[i] & 0b100) >> 2) * 2 - 1;
+      const ySide = ((bytes[i + 1] & 0b100) >> 2) * 2 - 1;
+      const xOffset = ((bytes[i] >> 3) * TILE + g * (TILE / 2) * xSide) * xSide;   // building − stash
+      const yOffset = ((bytes[i + 1] >> 3) * TILE + g * (TILE / 2) * ySide) * ySide;
+      const yaw = (bytes[i] & 0b11) * 90;
+      parts.push(`${modelIdx - 1},${-xOffset},${-yOffset},${yaw}`);   // TOWERS_BS has no GoldStash
+    }
+    if (!parts.length) throw new Error("No buildings found in the file.");
+    return parts.join(";");
+  }
+  // File-picker → decode → save into the base store, then call onSaved(id, name).
+  function importZombsmaticaFile(onSaved) {
+    const input = document.createElement("input");
+    input.type = "file"; input.accept = ".zombsmatica";
+    input.onchange = async (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      try {
+        const baseString = decodeZombsmatica(new Uint8Array(await file.arrayBuffer()));
+        const base = file.name.replace(/\.zombsmatica$/i, "");
+        const name = (prompt("Name this base:", base) || base).slice(0, 40);
+        const id = saveBase(name, baseString);
+        toast(`Imported “${name}” (${baseString.split(";").length} pieces).`);
+        if (onSaved) onSaved(id, name);
+      } catch (err) {
+        toast(`Import failed: ${err.message}`, "danger");
+      }
+    };
+    input.click();
   }
   // Persisted "which spot did I apply" + "which base did I pick", so the
   // finder reopens pre-loaded with the active spot shown as selected.
@@ -937,6 +1023,24 @@
     // base → recall to base → enable Auto Upgrade. Runs ENTIRELY on the
     // server (autonomy.js), so it keeps going even if you close this tab.
     const autoStatus = el("div", { id: "party-autonomy-status", style: "font:11px var(--font-mono);color:var(--text-mute);min-height:14px;margin:2px 0 8px" });
+
+    // Base picker — which saved base to build (remembered per party).
+    const baseSel = el("select", { class: "ax-input", style: "flex:1;min-width:0;font-size:12px" });
+    function fillBaseSel() {
+      baseSel.innerHTML = "";
+      const bases = savedBases(), ids = Object.keys(bases);
+      const last = localStorage.getItem(spotBaseKey(partyId));
+      if (!ids.length) baseSel.appendChild(el("option", { value: "" }, "(no bases — import a .zombsmatica →)"));
+      for (const id of ids) { const o = el("option", { value: id }, bases[id].name); if (id === last) o.selected = true; baseSel.appendChild(o); }
+    }
+    fillBaseSel();
+    baseSel.onchange = () => { try { localStorage.setItem(spotBaseKey(partyId), baseSel.value); } catch {} };
+    // Import a Zombsmatica blueprint (.zombsmatica) → store it → select it.
+    const importBtn = el("button", { class: "ax-btn ghost", style: "font-size:11px;padding:6px 10px;white-space:nowrap",
+      title: "Import a .zombsmatica blueprint exported from the Zombsmatica userscript",
+      onclick: () => importZombsmaticaFile((id) => { fillBaseSel(); baseSel.value = id; try { localStorage.setItem(spotBaseKey(partyId), id); } catch {} }) },
+      "Import .zombsmatica");
+
     const autoBtn = el("button", { id: "party-autonomy-btn", class: "ax-btn primary", style: "width:100%;margin-bottom:4px" }, "⚡ Go Autonomous (best spot)");
     autoBtn.onclick = () => {
       const job = autonomyJobForParty(partyId);
@@ -944,15 +1048,16 @@
         send({ op: "autonomyStop", args: { partyId: Number(partyId) } });
         return;
       }
-      // Use the last-picked base, else fall back to the first saved one,
-      // so an untouched dropdown doesn't block the click.
       const bases = savedBases();
-      const baseId = localStorage.getItem(spotBaseKey(partyId)) || Object.keys(bases)[0];
+      const baseId = baseSel.value || localStorage.getItem(spotBaseKey(partyId)) || Object.keys(bases)[0];
       const base = baseId && bases[baseId];
-      if (!base) { toast("No saved bases yet — record one with Base Saver in the in-game panel first.", "danger"); return; }
-      send({ op: "autonomyStart", args: { partyId: Number(partyId), baseString: base.baseString } });
-      toast(`Autonomous setup started with "${base.name}" — running on the server.`);
+      if (!base) { toast("No base selected — import a .zombsmatica blueprint first.", "danger"); return; }
+      // Open the base-render picker; it fires autonomyStart (with the per-session
+      // settle spots) when you hit Start.
+      openBasePositionModal(partyId, baseId, base);
     };
+    card.appendChild(el("div", { style: "font:9px var(--font);color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px" }, "base to build"));
+    card.appendChild(el("div", { style: "display:flex;gap:6px;align-items:center;margin-bottom:6px" }, baseSel, importBtn));
     card.appendChild(autoBtn);
     card.appendChild(autoStatus);
     send({ op: "autonomyStatus" });   // pull any in-progress job
@@ -1086,6 +1191,196 @@
     statusEl.style.color = job && job.phase === "failed" ? "var(--danger)"
       : job && job.phase === "done" ? "var(--success)" : "var(--text-mute)";
     if (btn) btn.textContent = running ? "■ Stop autonomous" : "⚡ Go Autonomous (best spot)";
+  }
+
+  // ── Base-render position picker (opens on "Go Autonomous") ──
+  // Renders the chosen saved base (stash centred) and lets you click where each
+  // session should settle. The picked spots are sent as per-bot {dx,dy} offsets
+  // from the stash; the autonomy parks each bot there once the base is built.
+  function openBasePositionModal(partyId, baseId, base) {
+    // Party sessions in id order — settle slots map to bots in this same order
+    // server-side (autonomy sorts bots by id).
+    const sess = state.sessions
+      .filter((s) => String(partyIdOf(s)) === String(partyId))
+      .sort((a, b) => a.id - b.id);
+    const n = Math.min(4, Math.max(1, sess.length || 4));
+
+    // Parse the layout into render pieces, RELATIVE to the stash centre.
+    // baseString part = "idx,dx,dy,yaw" and world = centre − (dx,dy), so the
+    // piece sits at (−dx,−dy) from centre. Wall/Door/SlowTrap are 1×1 (48u);
+    // everything else is 2×2 (96u). Doors + traps are walkable.
+    const FOOT = { Wall: 48, Door: 48, SlowTrap: 48 };
+    const WALKABLE = new Set(["Door", "SlowTrap"]);
+    const COLOR = {
+      Wall: "#8b8f9a", Door: "#c9a36b", SlowTrap: "#e0913a",
+      CannonTower: "#e2574c", BombTower: "#c0443b", ArrowTower: "#e08fb0",
+      MagicTower: "#a779e8", MeleeTower: "#5a9be0", GoldMine: "#e8c84a",
+      Harvester: "#5fc27e",
+    };
+    const pieces = [];
+    let minX = -48, maxX = 48, minY = -48, maxY = 48;   // include the 96u stash
+    for (const part of String(base.baseString).split(";")) {
+      const p = part.split(","); if (!p[0]) continue;
+      const type = TOWERS_BS[+p[0]]; if (!type) continue;
+      const x = -(+p[1]), y = -(+p[2]), sz = FOOT[type] || 96, yaw = (+p[3]) || 0;
+      pieces.push({ type, x, y, sz, yaw });
+      minX = Math.min(minX, x - sz / 2); maxX = Math.max(maxX, x + sz / 2);
+      minY = Math.min(minY, y - sz / 2); maxY = Math.max(maxY, y + sz / 2);
+    }
+
+    // ----- 48u-cell occupancy: which cell holds what. A session may only sit
+    // on an OPEN cell, a Door, or a SlowTrap — never a wall/tower. 1×1 pieces
+    // sit on a cell centre; 2×2 pieces (centre on a grid corner) cover 4 cells.
+    const cellType = new Map();   // "i,j" -> building type
+    const ckey = (i, j) => i + "," + j;
+    function markCell(i, j, type) {
+      const cur = cellType.get(ckey(i, j));
+      if (cur && !WALKABLE.has(cur)) return;   // a blocking type wins over a walkable one
+      cellType.set(ckey(i, j), type);
+    }
+    for (const pc of pieces) {
+      if (pc.sz === 48) markCell(Math.floor(pc.x / 48), Math.floor(pc.y / 48), pc.type);
+      else { const cx = Math.round(pc.x / 48), cy = Math.round(pc.y / 48);
+        for (const a of [cx - 1, cx]) for (const b of [cy - 1, cy]) markCell(a, b, pc.type); }
+    }
+    for (const a of [-1, 0]) for (const b of [-1, 0]) markCell(a, b, "GoldStash");   // the stash
+    const cellOk = (i, j) => { const t = cellType.get(ckey(i, j)); return !t || WALKABLE.has(t); };
+    function nearestOkCell(ci, cj) {
+      for (let r = 0; r <= 40; r++)
+        for (let di = -r; di <= r; di++) for (let dj = -r; dj <= r; dj++) {
+          if (Math.max(Math.abs(di), Math.abs(dj)) !== r) continue;
+          if (cellOk(ci + di, cj + dj)) return { i: ci + di, j: cj + dj };
+        }
+      return { i: ci, j: cj };
+    }
+
+    // Default markers: snap a small ring around the stash to the nearest legal cell.
+    const markers = [];
+    for (let i = 0; i < n; i++) {
+      const a = (2 * Math.PI * i) / n - Math.PI / 2;
+      const cell = nearestOkCell(Math.round(Math.cos(a) * 2), Math.round(Math.sin(a) * 2));
+      markers.push({ x: cell.i * 48 + 24, y: cell.j * 48 + 24 });
+    }
+    const mColor = ["#7dd3fc", "#fca5a5", "#86efac", "#fcd34d"];
+    let active = 0, hover = null;   // hover = {i,j} cell under the cursor
+
+    // ----- canvas + world↔canvas transform -----
+    const SZ = 460;
+    const canvas = el("canvas", { width: String(SZ), height: String(SZ),
+      style: "background:rgba(0,0,0,0.25);border:1px solid var(--border);border-radius:10px;cursor:crosshair;display:block;margin:0 auto;max-width:100%" });
+    const ctx = canvas.getContext("2d");
+    const cX = (minX + maxX) / 2, cY = (minY + maxY) / 2;
+    const scale = (SZ * 0.92) / Math.max(maxX - minX, maxY - minY, 1);
+    const toC = (wx, wy) => ({ x: SZ / 2 + (wx - cX) * scale, y: SZ / 2 + (wy - cY) * scale });
+    const fromC = (px, py) => ({ x: (px - SZ / 2) / scale + cX, y: (py - SZ / 2) / scale + cY });
+
+    function draw() {
+      ctx.clearRect(0, 0, SZ, SZ);
+      const drawTex = (type, wx, wy, sz, yaw) => {
+        const a = toC(wx, wy), d = sz * scale;   // piece centre in canvas px
+        const layers = BUILD_TEX[type];
+        let drew = false;
+        if (layers) for (const path of layers) {
+          const img = texImage(path, draw);      // cached; redraws on load
+          if (img.complete && img.naturalWidth) {
+            ctx.save(); ctx.translate(a.x, a.y);
+            if (yaw) ctx.rotate(yaw * Math.PI / 180);
+            ctx.drawImage(img, -d / 2, -d / 2, d, d);
+            ctx.restore(); drew = true;
+          }
+        }
+        if (!drew) {                              // texture still loading → faded fallback
+          ctx.globalAlpha = WALKABLE.has(type) ? 0.5 : 0.85;
+          ctx.fillStyle = COLOR[type] || "#888";
+          ctx.fillRect(a.x - d / 2 + 0.5, a.y - d / 2 + 0.5, d - 1, d - 1);
+          ctx.globalAlpha = 1;
+        }
+      };
+      for (const pc of pieces) drawTex(pc.type, pc.x, pc.y, pc.sz, pc.yaw);
+      drawTex("GoldStash", 0, 0, 96, 0);          // stash centrepiece, on top
+      // faint 48u grid so you can target an exact cell
+      ctx.strokeStyle = "rgba(255,255,255,0.06)"; ctx.lineWidth = 1;
+      for (let gx = Math.ceil(minX / 48) * 48; gx <= maxX; gx += 48) { const a = toC(gx, minY), b = toC(gx, maxY); ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
+      for (let gy = Math.ceil(minY / 48) * 48; gy <= maxY; gy += 48) { const a = toC(minX, gy), b = toC(maxX, gy); ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
+      // hovered cell — green if a session can sit there, red if it's a wall/tower
+      if (hover) {
+        const ok = cellOk(hover.i, hover.j), a = toC(hover.i * 48, hover.j * 48);
+        ctx.fillStyle = ok ? "rgba(52,211,153,0.22)" : "rgba(251,113,133,0.22)";
+        ctx.fillRect(a.x, a.y, 48 * scale, 48 * scale);
+        ctx.strokeStyle = ok ? "#34d399" : "#fb7185"; ctx.lineWidth = 2;
+        ctx.strokeRect(a.x, a.y, 48 * scale, 48 * scale);
+      }
+      markers.forEach((m, i) => {
+        const c = toC(m.x, m.y);
+        ctx.beginPath(); ctx.arc(c.x, c.y, i === active ? 11 : 9, 0, 2 * Math.PI);
+        ctx.fillStyle = mColor[i % 4]; ctx.fill();
+        ctx.lineWidth = i === active ? 3 : 1.5; ctx.strokeStyle = "#0b0d12"; ctx.stroke();
+        ctx.fillStyle = "#0b0d12"; ctx.font = "bold 11px sans-serif";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(String(i + 1), c.x, c.y);
+      });
+    }
+    const cellAt = (e) => {
+      const r = canvas.getBoundingClientRect();
+      const w = fromC((e.clientX - r.left) * (SZ / r.width), (e.clientY - r.top) * (SZ / r.height));
+      return { i: Math.floor(w.x / 48), j: Math.floor(w.y / 48) };
+    };
+    canvas.onclick = (e) => {
+      const { i, j } = cellAt(e);
+      if (!cellOk(i, j)) { toast("That cell is a wall or tower — pick an open cell, a door, or a slow-trap.", "danger"); return; }
+      markers[active] = { x: i * 48 + 24, y: j * 48 + 24 };   // snap to the exact cell centre
+      active = (active + 1) % n;   // auto-advance for quick placement
+      renderChips(); draw();
+    };
+    canvas.onmousemove = (e) => {
+      const { i, j } = cellAt(e);
+      if (!hover || hover.i !== i || hover.j !== j) { hover = { i, j }; draw(); }
+    };
+    canvas.onmouseleave = () => { if (hover) { hover = null; draw(); } };
+
+    // ----- session selector chips -----
+    const chipRow = el("div", { style: "display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin:8px 0" });
+    function renderChips() {
+      chipRow.innerHTML = "";
+      for (let i = 0; i < n; i++) {
+        const label = (sess[i] && sess[i].label) || `Session ${i + 1}`;
+        chipRow.appendChild(el("button", {
+          class: "ax-btn", style:
+            `font-size:11px;padding:4px 10px;border:2px solid ${i === active ? mColor[i % 4] : "var(--glass-border)"};` +
+            "border-radius:999px;display:inline-flex;align-items:center;gap:6px",
+          onclick: () => { active = i; renderChips(); draw(); },
+        },
+          el("span", { style: `width:10px;height:10px;border-radius:50%;background:${mColor[i % 4]};display:inline-block` }),
+          `${i + 1} · ${label}`));
+      }
+    }
+    renderChips();
+
+    // ----- overlay + panel -----
+    const overlay = el("div", { style: "position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px" });
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+
+    const startBtn = el("button", { class: "ax-btn primary", style: "flex:1" }, "⚡ Start Autonomous");
+    startBtn.onclick = () => {
+      const settle = markers.slice(0, n).map((m) => ({ dx: m.x, dy: m.y }));
+      try { localStorage.setItem(spotBaseKey(partyId), baseId); } catch {}
+      send({ op: "autonomyStart", args: { partyId: Number(partyId), baseString: base.baseString, settle } });
+      toast(`Autonomous started with "${base.name}" — running on the server.`);
+      overlay.remove();
+    };
+
+    overlay.appendChild(el("div", {
+      style: "background:var(--bg-panel);border:1px solid var(--border);border-radius:14px;padding:16px;width:min(540px,94vw);max-height:94vh;overflow:auto;box-shadow:var(--shadow)" },
+      el("div", { style: "font:600 14px var(--font);margin-bottom:2px" }, "Place your sessions"),
+      el("div", { class: "ax-card-hint", style: "margin-bottom:10px" },
+        `“${base.name}” · ${pieces.length} pieces. Pick a session below (it also auto-advances), then click the exact cell it should sit on. The hovered cell turns green if it's allowed (open ground, a door, or a slow-trap) or red if it's a wall/tower.`),
+      canvas,
+      chipRow,
+      el("div", { style: "display:flex;gap:8px;margin-top:6px" },
+        startBtn,
+        el("button", { class: "ax-btn ghost", onclick: () => overlay.remove() }, "Cancel"))));
+    document.body.appendChild(overlay);
+    draw();
   }
 
   function buildFarmPresetsCard(serverId) {

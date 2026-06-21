@@ -360,7 +360,13 @@ class Bot extends EventEmitter {
     this.ws.binaryType = "arraybuffer";
     this.ws.on("open", () => this.emit("open"));
     this.ws.on("message", (data) => this._onMessage(data));
-    this.ws.on("close", () => this._onClose());
+    this.ws.on("close", (code, reason) => {
+      // Capture WHY the socket closed so a mass party drop can be diagnosed:
+      // 1000/1001 = clean server close (game-over / kick), 1006 = abnormal
+      // (network drop, no close frame). Logged by sessions.js on the drop.
+      this._lastClose = { code, reason: reason ? reason.toString().slice(0, 80) : "", at: Date.now() };
+      this._onClose();
+    });
     this.ws.on("error", (err) => this.emit("error", err));
     this.uptimeMs = Date.now();
     this.hasFarmed = !this.behaviours.autoFarm;
@@ -444,6 +450,11 @@ class Bot extends EventEmitter {
     // Banshee handles data.allowed === false by sending a single 0 byte
     // back. That's how the bot signals "you got rejected" upstream.
     if (!data.allowed) {
+      // The server refused the join. A party-wide streak of this is the
+      // signature of a kick / anti-bot block (as opposed to a clean
+      // game-over close), so surface it explicitly.
+      this._lastReject = Date.now();
+      console.log(`[bot ${this.id}] enter-world REJECTED (allowed=false) — kicked / anti-bot / party-full?`);
       try { this.ws.send(0); } catch {}
       return;
     }
@@ -1152,6 +1163,8 @@ class Bot extends EventEmitter {
     }
 
     // ── (Re)plan toward the desired location ──
+    // (Pathfinding is kept cheap by the pathfinder's integer-keyed grid, so this
+    // can replan freely without freezing the shared event loop.)
     const needPlan = !this.navPath || this.navIndex >= (this.navPath ? this.navPath.length : 0)
       || this.tick >= this.navReplanTick || this._navTargetMoved(desired);
     if (needPlan) {

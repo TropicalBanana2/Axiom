@@ -31,4 +31,9 @@ desktop.ini
 
 # ── Local-only context pack (not for publishing) ───────────────
 zombscontext/
+zombstext/
 tools-preview-static.js
+
+# ── Local handoff notes (keep out of git) ──────────────────────
+HANDOFF.md
+handoffs/
